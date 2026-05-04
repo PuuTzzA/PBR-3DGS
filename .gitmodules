@@ -1,0 +1,9 @@
+[submodule "GIR"]
+	path = GIR
+	url = https://github.com/PuuTzzA/GIR.git
+[submodule "prior_extractors/RGB-X"]
+	path = prior_extractors/RGB-X
+	url = https://github.com/zheng95z/rgbx.git
+[submodule "prior_extractors/DiffusionRenderer"]
+	path = prior_extractors/DiffusionRenderer
+	url = https://github.com/nv-tlabs/diffusion-renderer.git
