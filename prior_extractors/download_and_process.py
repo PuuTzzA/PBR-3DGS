@@ -52,35 +52,51 @@ zenodo_links = {
 
 os.makedirs(RESULT_DIR, exist_ok=True)
 
-if not os.path.exists(os.path.join(RESULT_DIR, "armadillo.zip")) or not os.path.exists(os.path.join(RESULT_DIR, "lego.zip")):
-    try:
-        for filename, url in zenodo_links.items():
-            zip_filepath = os.path.join(RESULT_DIR, filename)
-            download_with_progress(url, zip_filepath)
-            extract_zip_with_progress(zip_filepath, RESULT_DIR)
-            os.remove(zip_filepath)
-    except Exception as e:
-        print("Download These two files manually and place them in the /data folder and run the script again.")
-        for filename, url in zenodo_links.items():
-            print(f"{filename} from: {url}")
-        sys.exit(1)
+# 1. Zenodo Files
+failed_downloads =[]
 
 for filename, url in zenodo_links.items():
     zip_filepath = os.path.join(RESULT_DIR, filename)
     
-    # Check if the file was manually downloaded
-    if not os.path.exists(zip_filepath):
-        print(f"\n[ERROR] Missing {filename}!")
-        print(f"Please manually download it from: {url}")
-        print(f"And place it inside the '{RESULT_DIR}' folder.")
+    # Get the folder name without '.zip' (e.g., 'lego' or 'armadillo')
+    folder_name = filename.replace('.zip', '')
+    extract_dir = os.path.join(RESULT_DIR, folder_name)
+    
+    # Skip if we already extracted this folder previously
+    if os.path.exists(extract_dir):
+        print(f"Skipping {filename}: Already extracted to {extract_dir}")
         continue
-        
-    # Extract the manually downloaded file
-    extract_zip_with_progress(zip_filepath, RESULT_DIR)
+
+    # If the zip doesn't exist, try to download it automatically
+    if not os.path.exists(zip_filepath):
+        try:
+            download_with_progress(url, zip_filepath)
+        except Exception as e:
+            # Record the failure and move on to check the next file
+            failed_downloads.append((filename, url))
+            continue
+            
+    # Extract the file into its specific subfolder (e.g., ./data/lego)
+    os.makedirs(extract_dir, exist_ok=True)
+    extract_zip_with_progress(zip_filepath, extract_dir)
     
     # Clean up the zip file after extraction to save space
     os.remove(zip_filepath)
 
+# If any downloads failed, print them all out at once and exit
+if failed_downloads:
+    print("\n" + "="*60)
+    print("[ERROR] The following files could not be downloaded automatically.")
+    print(f"Please manually download them and place them in the '{RESULT_DIR}' folder:\n")
+    
+    for filename, url in failed_downloads:
+        print(f"-> {filename}")
+        print(f"   Download link: {url}\n")
+        
+    print("After placing the files, run this script again.")
+    print("="*60)
+    sys.exit(1)
+    
 # 2. Hugging Face Files
 REPO_ID = "nvs-bench/mipnerf360"
 folders = ["bicycle/*", "garden/*"]
@@ -91,11 +107,9 @@ snapshot_download(
     repo_type="dataset",
     allow_patterns=folders,
     local_dir=RESULT_DIR,
-    local_dir_use_symlinks=False,
-    tqdm_class=tqdm # Explicitly tell HF to use our tqdm
 )
 
-print(f"Done! Files are in {RESULT_DIR}")
+print(f"Done Downloading! Files are in {RESULT_DIR}")
 
 # Move images into correct folders
 def organize_datasets():
@@ -137,6 +151,10 @@ def organize_datasets():
             for root, dirs, files in os.walk(src_path):
                 if "rgba.png" in files:
                     rgba_files.append(os.path.join(root, "rgba.png"))
+                    
+                for root_, dirs_, files_ in os.walk(src_path):
+                    if "rgba.png" in files_:
+                        rgba_files.append(os.path.join(root_, "rgba.png"))
 
             for file_path in tqdm(rgba_files, desc=f"Extracting {folder_name} rgba.pngs"):
                 # Get the name of the parent folder (e.g., 'test_001')
