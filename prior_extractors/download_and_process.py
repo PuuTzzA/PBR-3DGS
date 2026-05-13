@@ -1,4 +1,5 @@
 import os
+import sys
 import requests
 import zipfile
 from tqdm.auto import tqdm  
@@ -8,10 +9,17 @@ from huggingface_hub import snapshot_download
 
 RESULT_DIR = "./data"
 
+# 1. Zenodo Files
 def download_with_progress(url, destination):
-    # Added headers because some servers refuse to give 'content-length' to scripts
-    headers = {"User-Agent": "Mozilla/5.0"}
+    # Use a realistic User-Agent to prevent Zenodo's WAF from blocking the request
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    }
     response = requests.get(url, stream=True, headers=headers)
+    
+    # Immediately check for HTTP errors (e.g., 403 Forbidden, 404 Not Found)
+    # This prevents the script from saving an HTML error page as a .zip file
+    response.raise_for_status()
     
     # Check if we got the file size
     total_size = int(response.headers.get('content-length', 0))
@@ -44,11 +52,33 @@ zenodo_links = {
 
 os.makedirs(RESULT_DIR, exist_ok=True)
 
-# 1. Zenodo Files
+if not os.path.exists(os.path.join(RESULT_DIR, "armadillo.zip")) or not os.path.exists(os.path.join(RESULT_DIR, "lego.zip")):
+    try:
+        for filename, url in zenodo_links.items():
+            zip_filepath = os.path.join(RESULT_DIR, filename)
+            download_with_progress(url, zip_filepath)
+            extract_zip_with_progress(zip_filepath, RESULT_DIR)
+            os.remove(zip_filepath)
+    except Exception as e:
+        print("Download These two files manually and place them in the /data folder and run the script again.")
+        for filename, url in zenodo_links.items():
+            print(f"{filename} from: {url}")
+        sys.exit(1)
+
 for filename, url in zenodo_links.items():
     zip_filepath = os.path.join(RESULT_DIR, filename)
-    download_with_progress(url, zip_filepath)
+    
+    # Check if the file was manually downloaded
+    if not os.path.exists(zip_filepath):
+        print(f"\n[ERROR] Missing {filename}!")
+        print(f"Please manually download it from: {url}")
+        print(f"And place it inside the '{RESULT_DIR}' folder.")
+        continue
+        
+    # Extract the manually downloaded file
     extract_zip_with_progress(zip_filepath, RESULT_DIR)
+    
+    # Clean up the zip file after extraction to save space
     os.remove(zip_filepath)
 
 # 2. Hugging Face Files
@@ -123,5 +153,4 @@ def organize_datasets():
     print("\nOrganization complete!")
     print(f"Your processed folders are in: {os.path.abspath(RESULT_DIR)}")
 
-if __name__ == "__main__":
-    organize_datasets()
+organize_datasets()
