@@ -1,4 +1,4 @@
-# GIR Windows Setup Guide:
+# GIR Windows Setup Guide
 
 This guide documents how to set up and run GIR on **Windows** with:
 - Conda / Miniconda
