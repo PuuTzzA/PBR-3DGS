@@ -359,3 +359,29 @@ export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
 
 export CUDACXX=$CUDA_HOME/bin/nvcc
 ```
+
+For persistent training:
+```bash
+# Start a new tmux session
+tmux new -s gir
+
+# Inside tmux, run training
+cd ~/PBR-3DGS/GIR
+conda activate gir
+python run_training.py
+
+# Detach from tmux (training keeps running): press Ctrl+B, then D
+
+# Later, reconnect after SSH:
+tmux attach -s gir
+```
+
+capture output of tmux 
+```bash
+tmux capture-pane -t gir -pS -10000 > ~/training_log.txt
+```
+
+exit tmux (stop it from running)
+```bash
+exit
+```
