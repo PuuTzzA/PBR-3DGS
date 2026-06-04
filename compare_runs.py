@@ -144,38 +144,145 @@ def split_grid_image(path):
         print(f"Warning: Failed to split grid image {path}: {e}")
         return None, None
 
+def extract_loss_component(loss_components, key):
+    """Extract iterations and values for a loss component key."""
+    iters, vals = [], []
+    for entry in loss_components:
+        if key in entry and entry[key] is not None:
+            iters.append(entry["iteration"])
+            vals.append(entry[key])
+    return iters, vals
+
 def main():
     parser = argparse.ArgumentParser(description="Generate PBR-3DGS/GIR Run Comparison PDF Report")
-    parser.add_argument("--folder_a", type=str, required=True, help="Path to Run A folder (Baseline)")
-    parser.add_argument("--folder_b", type=str, required=True, help="Path to Run B folder (Proposed)")
+    parser.add_argument("--run", action="append", nargs=2, metavar=("FOLDER", "NAME"), help="Output folder and display name for a run (can be specified multiple times)")
+    parser.add_argument("--folder_a", type=str, default=None, help="Path to Run A folder (Baseline)")
+    parser.add_argument("--folder_b", type=str, default=None, help="Path to Run B folder (Proposed)")
     parser.add_argument("--name_a", type=str, default="Baseline (No Priors)", help="Display name for Run A")
     parser.add_argument("--name_b", type=str, default="Proposed (With Priors)", help="Display name for Run B")
-    parser.add_argument("--output_pdf", type=str, default="comparison_report.pdf", help="Output comparison PDF path")
+    parser.add_argument("--output_pdf", type=str, default=None, help="Output comparison PDF path")
     args = parser.parse_args()
 
+    runs = []
+    if args.run:
+        for folder, name in args.run:
+            runs.append({"folder": folder, "name": name})
+    else:
+        # Fallback to --folder_a and --folder_b
+        if not args.folder_a and not args.folder_b:
+            parser.error("You must specify either --run or --folder_a and --folder_b")
+        if args.folder_a:
+            runs.append({"folder": args.folder_a, "name": args.name_a})
+        if args.folder_b:
+            runs.append({"folder": args.folder_b, "name": args.name_b})
+
+    # Configure run colors
+    RUN_COLORS = [
+        "#2196F3",  # Blue
+        "#E91E63",  # Pink/Red
+        "#9C27B0",  # Purple
+        "#FF9800",  # Orange
+        "#00BCD4",  # Cyan
+        "#795548",  # Brown
+        "#607D8B",  # Blue Grey
+    ]
+    for idx, run in enumerate(runs):
+        run["color"] = RUN_COLORS[idx % len(RUN_COLORS)]
+
     print(f"Comparing runs:")
-    print(f"  Run A (Baseline): {args.folder_a}")
-    print(f"  Run B (Proposed): {args.folder_b}")
+    for run in runs:
+        print(f"  Run: {run['folder']} ({run['name']})")
 
-    # Load configurations
-    cfg_a = parse_cfg_args(os.path.join(args.folder_a, "cfg_args"))
-    cfg_b = parse_cfg_args(os.path.join(args.folder_b, "cfg_args"))
+    # Default output PDF path if not specified
+    if args.output_pdf is None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_dir = os.path.join("outputs", f"comparison_{timestamp}")
+        args.output_pdf = os.path.join(out_dir, "comparison_report.pdf")
 
-    # Load metrics
-    metrics_a = load_metrics_log(args.folder_a)
-    metrics_b = load_metrics_log(args.folder_b)
+    # Ensure parent directory of output_pdf exists
+    out_dir = os.path.dirname(args.output_pdf)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+    else:
+        out_dir = "."
 
-    if not metrics_a and not metrics_b:
-        print("ERROR: Neither folder has a valid metrics_log.json! Cannot generate comparison.")
+    # Helper to save a single metric plot as a PNG
+    def save_single_metric_plot(key, ylabel, title, filename, higher_better=True):
+        fig_single, ax_single = plt.subplots(figsize=(8, 6))
+        fig_single.patch.set_facecolor("#FAFAFA")
+        
+        for run in runs:
+            iters, vals = extract_metric(run["metrics"], key)
+            if iters:
+                label = f"{run['name']} (final: {vals[-1]:.3f})"
+                ax_single.plot(iters, vals, "o-", color=run["color"], markersize=3, linewidth=1.5, label=label)
+        
+        ax_single.set_xlabel("Iteration")
+        ax_single.set_ylabel(ylabel)
+        ax_single.set_title(title, fontsize=12, fontweight="bold")
+        ax_single.grid(True, alpha=0.3, linestyle="--")
+        ax_single.legend(loc="best")
+        
+        fig_single.tight_layout()
+        fig_single.savefig(os.path.join(out_dir, filename), dpi=150)
+        plt.close(fig_single)
+
+    # Helper to save a single weight plot as a PNG
+    def save_single_weight_plot(key, ylabel, title, filename):
+        fig_single, ax_single = plt.subplots(figsize=(8, 6))
+        fig_single.patch.set_facecolor("#FAFAFA")
+        
+        has_data = False
+        for run in runs:
+            iters, vals = extract_loss_component(run["loss_components"], key)
+            if iters:
+                label = f"{run['name']} (final: {vals[-1]:.3f})"
+                ax_single.plot(iters, vals, "-", color=run["color"], linewidth=2.0, label=label)
+                has_data = True
+        
+        ax_single.set_xlabel("Iteration")
+        ax_single.set_ylabel(ylabel)
+        ax_single.set_title(title, fontsize=12, fontweight="bold")
+        ax_single.grid(True, alpha=0.3, linestyle="--")
+        
+        if has_data:
+            ax_single.legend(loc="best")
+        else:
+            ax_single.text(0.5, 0.5, "No uncertainty weight data logged for this run / constant 0.0",
+                           ha="center", va="center", transform=ax_single.transAxes, color="gray", fontsize=10)
+        
+        fig_single.tight_layout()
+        fig_single.savefig(os.path.join(out_dir, filename), dpi=150)
+        plt.close(fig_single)
+
+    # Load configurations, metrics, and loss logs
+    for run in runs:
+        folder = run["folder"]
+        run["cfg"] = parse_cfg_args(os.path.join(folder, "cfg_args"))
+        run["metrics"] = load_metrics_log(folder)
+        
+        # Load loss components if they exist (for uncertainty weights)
+        loss_components_path = os.path.join(folder, "train_process", "loss_components.json")
+        run["loss_components"] = []
+        if os.path.exists(loss_components_path):
+            try:
+                with open(loss_components_path, "r") as f:
+                    run["loss_components"] = json.load(f)
+            except Exception as e:
+                print(f"Warning: Failed to load loss components from {loss_components_path}: {e}")
+
+    valid_runs = [r for r in runs if r["metrics"]]
+    if not valid_runs:
+        print("ERROR: None of the specified folders have a valid metrics_log.json! Cannot generate comparison.")
         sys.exit(1)
 
-    final_a = get_final_metrics(metrics_a)
-    final_b = get_final_metrics(metrics_b)
-
     # Resolve dataset paths
-    dataset_a = cfg_a.get("source_path", "Unknown")
-    dataset_b = cfg_b.get("source_path", "Unknown")
-    resolved_dataset = dataset_b if dataset_b != "Unknown" else dataset_a
+    resolved_dataset = "Unknown"
+    for run in runs:
+        source_path = run["cfg"].get("source_path", "Unknown")
+        if source_path != "Unknown":
+            resolved_dataset = source_path
+            break
     dataset_name = os.path.basename(os.path.normpath(resolved_dataset)) if resolved_dataset else "Unknown"
 
     # Start PDF generation
@@ -202,24 +309,39 @@ def main():
         # Collect keys that differ or are critical
         critical_keys = ["iterations", "first_stage_step", "second_stage_step", "exclude_prior_loss", 
                          "lambda_albedo_gt", "lambda_normal_gt", "lambda_metallic_gt"]
-        all_keys = sorted(list(set(list(cfg_a.keys()) + list(cfg_b.keys()))))
-        diff_keys = [k for k in all_keys if cfg_a.get(k) != cfg_b.get(k)]
+        all_keys = set()
+        for run in runs:
+            all_keys.update(run["cfg"].keys())
+        all_keys = sorted(list(all_keys))
+        
+        # Check if values differ across any of the runs
+        diff_keys = []
+        for k in all_keys:
+            vals = [run["cfg"].get(k) for run in runs]
+            if len(set(vals)) > 1:
+                diff_keys.append(k)
         
         # Merge critical keys and differences
         keys_to_show = sorted(list(set(critical_keys + diff_keys)))
         
         table_data = []
         for k in keys_to_show:
-            val_a = cfg_a.get(k, "—")
-            val_b = cfg_b.get(k, "—")
-            # Highlight if different
-            is_diff = val_a != val_b
+            row = []
+            is_diff = False
+            first_val = runs[0]["cfg"].get(k, "—")
+            for run in runs:
+                val = run["cfg"].get(k, "—")
+                if val != first_val:
+                    is_diff = True
+                row.append(str(val))
             marker = "*" if is_diff else ""
-            table_data.append([f"{k}{marker}", str(val_a), str(val_b)])
+            table_data.append([f"{k}{marker}"] + row)
 
-        header = ["Argument", args.name_a, args.name_b]
+        header = ["Argument"] + [run["name"] for run in runs]
+        num_runs = len(runs)
+        col_widths = [0.3] + [0.6 / num_runs] * num_runs
         table = ax.table(cellText=table_data, colLabels=header, loc="center", cellLoc="left",
-                         colWidths=[0.35, 0.3, 0.3])
+                         colWidths=col_widths)
         table.auto_set_font_size(False)
         table.set_fontsize(8)
         table.scale(1.0, 1.3)
@@ -260,28 +382,30 @@ def main():
 
         metrics_table_data = []
         for key, name, higher_better in metrics_def:
-            val_a = final_a.get(key, None)
-            val_b = final_b.get(key, None)
-            
-            str_a = f"{val_a:.4f}" if val_a is not None else "N/A"
-            str_b = f"{val_b:.4f}" if val_b is not None else "N/A"
+            row = []
+            vals = []
+            for run in runs:
+                val = get_final_metrics(run["metrics"]).get(key, None)
+                vals.append(val)
+                row.append(f"{val:.4f}" if val is not None else "N/A")
             
             # Determine winner
             winner = ""
-            if val_a is not None and val_b is not None:
-                if val_a != val_b:
-                    if higher_better:
-                        winner = args.name_a if val_a > val_b else args.name_b
-                    else:
-                        winner = args.name_a if val_a < val_b else args.name_b
+            valid_vals = [v for v in vals if v is not None]
+            if len(valid_vals) > 0:
+                if len(set(valid_vals)) > 1:
+                    best_val = max(valid_vals) if higher_better else min(valid_vals)
+                    best_idx = vals.index(best_val)
+                    winner = runs[best_idx]["name"]
                 else:
-                    winner = "Tie"
+                    winner = "Tie" if len(valid_vals) > 1 else ""
             
-            metrics_table_data.append([name, str_a, str_b, winner])
+            metrics_table_data.append([name] + row + [winner])
 
-        m_header = ["Evaluation Metric", args.name_a, args.name_b, "Top Performer"]
+        m_header = ["Evaluation Metric"] + [run["name"] for run in runs] + ["Top Performer"]
+        col_widths = [0.35] + [0.44 / num_runs] * num_runs + [0.21]
         m_table = ax.table(cellText=metrics_table_data, colLabels=m_header, loc="center", cellLoc="center",
-                           colWidths=[0.35, 0.22, 0.22, 0.21])
+                           colWidths=col_widths)
         m_table.auto_set_font_size(False)
         m_table.set_fontsize(10)
         m_table.scale(1.0, 1.8)
@@ -291,7 +415,7 @@ def main():
             m_table[0, j].set_facecolor("#16213E")
             m_table[0, j].set_text_props(color="white", fontweight="bold")
         for i in range(1, len(metrics_table_data) + 1):
-            winner_name = metrics_table_data[i-1][3]
+            winner_name = metrics_table_data[i-1][-1]
             for j in range(len(m_header)):
                 if winner_name != "Tie" and winner_name != "" and m_header[j] == winner_name:
                     m_table[i, j].set_facecolor("#C8E6C9")  # Light green for winner
@@ -305,26 +429,33 @@ def main():
                 ha="left", va="top", transform=ax.transAxes, color="#1A1A2E")
         
         analysis_text = ""
-        alb_a = final_a.get("test_albedo_psnr")
-        alb_b = final_b.get("test_albedo_psnr")
-        if alb_a is not None and alb_b is not None:
-            diff = alb_b - alb_a
-            analysis_text += f"• **Albedo Reconstruction Accuracy:** The proposed run achieves an albedo PSNR of **{alb_b:.2f} dB**, which is an improvement of **{diff:+.2f} dB** over the baseline (**{alb_a:.2f} dB**).\n"
-        
-        ang_a = final_a.get("test_normal_ang_err")
-        ang_b = final_b.get("test_normal_ang_err")
-        if ang_a is not None and ang_b is not None:
-            diff = ang_a - ang_b
-            analysis_text += f"• **Surface Normal Estimation:** The angular error of the estimated surface normals drops from **{ang_a:.2f}°** to **{ang_b:.2f}°** (**{diff:+.2f}°** reduction) due to normal prior guidance.\n"
+        if len(runs) >= 2:
+            run_a, run_b = runs[0], runs[1]
+            final_a = get_final_metrics(run_a["metrics"])
+            final_b = get_final_metrics(run_b["metrics"])
             
-        psnr_a = final_a.get("test_psnr")
-        psnr_b = final_b.get("test_psnr")
-        if psnr_a is not None and psnr_b is not None:
-            diff = psnr_b - psnr_a
-            analysis_text += f"• **Overall RGB Novel-View Synthesis:** Novel-view synthesis PSNR changes by **{diff:+.2f} dB** (Baseline: **{psnr_a:.2f} dB** vs Proposed: **{psnr_b:.2f} dB**).\n"
-
+            alb_a = final_a.get("test_albedo_psnr")
+            alb_b = final_b.get("test_albedo_psnr")
+            if alb_a is not None and alb_b is not None:
+                diff = alb_b - alb_a
+                analysis_text += f"• **Albedo Reconstruction Accuracy:** {run_b['name']} achieves an albedo PSNR of **{alb_b:.2f} dB**, which is an improvement of **{diff:+.2f} dB** over {run_a['name']} (**{alb_a:.2f} dB**).\n"
+            
+            ang_a = final_a.get("test_normal_ang_err")
+            ang_b = final_b.get("test_normal_ang_err")
+            if ang_a is not None and ang_b is not None:
+                diff = ang_a - ang_b
+                analysis_text += f"• **Surface Normal Estimation:** The angular error of the estimated surface normals drops from **{ang_a:.2f}°** to **{ang_b:.2f}°** (**{diff:+.2f}°** reduction) for {run_b['name']} vs {run_a['name']}.\n"
+                
+            psnr_a = final_a.get("test_psnr")
+            psnr_b = final_b.get("test_psnr")
+            if psnr_a is not None and psnr_b is not None:
+                diff = psnr_b - psnr_a
+                analysis_text += f"• **Overall RGB Novel-View Synthesis:** Novel-view synthesis PSNR changes by **{diff:+.2f} dB** ({run_a['name']}: **{psnr_a:.2f} dB** vs {run_b['name']}: **{psnr_b:.2f} dB**).\n"
+        else:
+            analysis_text = "• Comparative metrics show training progress for the loaded run."
+            
         if not analysis_text:
-            analysis_text = "• Comparative metrics show a clear quantitative change when guiding optimization with albedo, normal, and metallic prior maps."
+            analysis_text = "• Comparative metrics show training progress across runs."
 
         ax.text(0.05, findings_y - 0.05, analysis_text, fontsize=10, ha="left", va="top",
                 transform=ax.transAxes, color="#333", linespacing=1.6)
@@ -337,71 +468,121 @@ def main():
         fig.suptitle("Convergence and Performance Curves Over Training", fontsize=14, fontweight="bold", y=0.98)
         fig.patch.set_facecolor("#FAFAFA")
 
-        def plot_comparison_curve(ax, key, ylabel, title, higher_better=True):
-            iters_a, vals_a = extract_metric(metrics_a, key)
-            iters_b, vals_b = extract_metric(metrics_b, key)
-            
-            if iters_a:
-                ax.plot(iters_a, vals_a, "o-", color=COLORS["a"], markersize=2, linewidth=1.2, label=args.name_a)
-            if iters_b:
-                ax.plot(iters_b, vals_b, "s--", color=COLORS["b"], markersize=2, linewidth=1.2, label=args.name_b)
+        def plot_comparison_curve_n(ax, key, ylabel, title, higher_better=True):
+            for run in runs:
+                iters, vals = extract_metric(run["metrics"], key)
+                if iters:
+                    label = f"{run['name']} (final: {vals[-1]:.3f})"
+                    ax.plot(iters, vals, "o-", color=run["color"], markersize=2, linewidth=1.2, label=label)
             
             ax.set_xlabel("Iteration")
             ax.set_ylabel(ylabel)
             ax.set_title(title)
             ax.legend(loc="best")
-            
-            # Annotate final values
-            if vals_a:
-                ax.annotate(f"{vals_a[-1]:.3f}", xy=(iters_a[-1], vals_a[-1]), textcoords="offset points",
-                            xytext=(-15, 10 if higher_better else -15), fontsize=8, color=COLORS["a"])
-            if vals_b:
-                ax.annotate(f"{vals_b[-1]:.3f}", xy=(iters_b[-1], vals_b[-1]), textcoords="offset points",
-                            xytext=(15, 10 if higher_better else -15), fontsize=8, color=COLORS["b"])
 
-        plot_comparison_curve(axes[0, 0], "test_psnr", "PSNR (dB)", "Novel-View RGB PSNR ↑", higher_better=True)
-        plot_comparison_curve(axes[0, 1], "test_albedo_psnr", "PSNR (dB)", "Albedo PSNR ↑", higher_better=True)
-        plot_comparison_curve(axes[1, 0], "test_normal_ang_err", "Degrees (°)", "Normal Angular Error ↓", higher_better=False)
-        plot_comparison_curve(axes[1, 1], "train_loss", "Loss (EMA)", "Training Loss ↓", higher_better=False)
+        plot_comparison_curve_n(axes[0, 0], "test_psnr", "PSNR (dB)", "Novel-View RGB PSNR ↑", higher_better=True)
+        plot_comparison_curve_n(axes[0, 1], "test_albedo_psnr", "PSNR (dB)", "Albedo PSNR ↑", higher_better=True)
+        plot_comparison_curve_n(axes[1, 0], "test_normal_ang_err", "Degrees (°)", "Normal Angular Error ↓", higher_better=False)
+        plot_comparison_curve_n(axes[1, 1], "train_loss", "Loss (EMA)", "Training Loss ↓", higher_better=False)
 
         fig.tight_layout(rect=[0, 0, 1, 0.95])
         pdf.savefig(fig, bbox_inches="tight")
         plt.close(fig)
 
-        # ─── Page 4: Visual Reconstruction Comparison Grid (RGB, Albedo, Normal) ───
-        # Find visual files
+        # Save individual PNGs for convergence curves
+        save_single_metric_plot("test_psnr", "PSNR (dB)", "Novel-View RGB PSNR", "novel_view_rgb_psnr.png", higher_better=True)
+        save_single_metric_plot("test_albedo_psnr", "PSNR (dB)", "Albedo PSNR", "albedo_psnr.png", higher_better=True)
+        save_single_metric_plot("test_normal_ang_err", "Degrees (°)", "Normal Angular Error", "normal_angular_error.png", higher_better=False)
+        save_single_metric_plot("train_loss", "Loss (EMA)", "Training Loss", "training_loss.png", higher_better=False)
+
+        # ─── Page 4: Uncertainty Weights Evolution ───
+        fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+        fig.suptitle("Kendall Uncertainty Weights Evolution Over Iterations", fontsize=16, fontweight="bold", y=0.98)
+        fig.patch.set_facecolor("#FAFAFA")
+
+        weight_keys = [
+            ("w_albedo", "Albedo Weight (w_albedo)", "Albedo Uncertainty Weight"),
+            ("w_metallic", "Metallic Weight (w_metallic)", "Metallic Uncertainty Weight"),
+            ("w_normal", "Normal Weight (w_normal)", "Normal Uncertainty Weight"),
+        ]
+
+        for idx, (key, ylabel, title) in enumerate(weight_keys):
+            ax = axes[idx]
+            has_data = False
+            for run in runs:
+                iters, vals = extract_loss_component(run["loss_components"], key)
+                if iters:
+                    label = f"{run['name']} (final: {vals[-1]:.3f})"
+                    ax.plot(iters, vals, "-", color=run["color"], linewidth=1.5, label=label)
+                    has_data = True
+            
+            ax.set_xlabel("Iteration")
+            ax.set_ylabel(ylabel)
+            ax.set_title(title, fontsize=11, fontweight="semibold")
+            ax.grid(True, alpha=0.3, linestyle="--")
+            if has_data:
+                ax.legend(loc="best", fontsize=8)
+            else:
+                ax.text(0.5, 0.5, "No uncertainty weight data logged for this run / constant 0.0",
+                        ha="center", va="center", transform=ax.transAxes, color="gray", fontsize=9)
+
+        fig.tight_layout(rect=[0, 0, 1, 0.92])
+        pdf.savefig(fig, bbox_inches="tight")
+        plt.close(fig)
+
+        # Save individual PNGs for weights
+        save_single_weight_plot("w_albedo", "Albedo Weight (w_albedo)", "Albedo Uncertainty Weight Evolution", "uncertainty_weight_albedo.png")
+        save_single_weight_plot("w_metallic", "Metallic Weight (w_metallic)", "Metallic Uncertainty Weight Evolution", "uncertainty_weight_metallic.png")
+        save_single_weight_plot("w_normal", "Normal Weight (w_normal)", "Normal Uncertainty Weight Evolution", "uncertainty_weight_normal.png")
+
+        # ─── Page 5: Visual Reconstruction Comparison Grid (RGB, Albedo, Normal) ───
         print("Locating visual comparisons...")
-        # Get maximum completed iteration in B and A
-        max_iter_a = max(extract_metric(metrics_a, "iteration")[0]) if metrics_a else 0
-        max_iter_b = max(extract_metric(metrics_b, "iteration")[0]) if metrics_b else 0
         
-        # Look for albedo & normal GT comparison grids
-        alb_grid_a = os.path.join(args.folder_a, "train_process", "albedo_gt_comparison", f"{max_iter_a:05d}.png")
-        alb_grid_b = os.path.join(args.folder_b, "train_process", "albedo_gt_comparison", f"{max_iter_b:05d}.png")
-        
-        norm_grid_a = os.path.join(args.folder_a, "train_process", "normal_gt_comparison", f"{max_iter_a:05d}.png")
-        norm_grid_b = os.path.join(args.folder_b, "train_process", "normal_gt_comparison", f"{max_iter_b:05d}.png")
+        max_iters = []
+        for run in runs:
+            iters, _ = extract_metric(run["metrics"], "iteration")
+            max_iters.append(max(iters) if iters else 0)
 
-        # Test RGB grids
-        rgb_grid_a = glob.glob(os.path.join(args.folder_a, "eval_visuals", "test", f"iter{max_iter_a:06d}_view*.png"))
-        rgb_grid_b = glob.glob(os.path.join(args.folder_b, "eval_visuals", "test", f"iter{max_iter_b:06d}_view*.png"))
+        # Collect split images for all runs
+        run_visuals = []
+        gt_rgb, gt_alb, gt_norm = None, None, None
 
-        # Select a sample RGB view
-        rgb_a_path = rgb_grid_a[0] if rgb_grid_a else None
-        rgb_b_path = rgb_grid_b[0] if rgb_grid_b else None
+        for run, max_iter in zip(runs, max_iters):
+            folder = run["folder"]
+            alb_grid = os.path.join(folder, "train_process", "albedo_gt_comparison", f"{max_iter:05d}.png")
+            norm_grid = os.path.join(folder, "train_process", "normal_gt_comparison", f"{max_iter:05d}.png")
+            
+            rgb_grids = glob.glob(os.path.join(folder, "eval_visuals", "test", f"iter{max_iter:06d}_view*.png"))
+            rgb_path = rgb_grids[0] if rgb_grids else None
 
-        # Split renders vs GT
-        r_rgb_a, gt_rgb = split_grid_image(rgb_a_path)
-        r_rgb_b, _ = split_grid_image(rgb_b_path)
-        
-        r_alb_a, gt_alb = split_grid_image(alb_grid_a)
-        r_alb_b, _ = split_grid_image(alb_grid_b)
-        
-        r_norm_a, gt_norm = split_grid_image(norm_grid_a)
-        r_norm_b, _ = split_grid_image(norm_grid_b)
+            r_rgb, current_gt_rgb = split_grid_image(rgb_path)
+            r_alb, current_gt_alb = split_grid_image(alb_grid)
+            r_norm, current_gt_norm = split_grid_image(norm_grid)
+
+            if gt_rgb is None and current_gt_rgb is not None:
+                gt_rgb = current_gt_rgb
+            if gt_alb is None and current_gt_alb is not None:
+                gt_alb = current_gt_alb
+            if gt_norm is None and current_gt_norm is not None:
+                gt_norm = current_gt_norm
+
+            run_visuals.append({
+                "name": run["name"],
+                "color": run["color"],
+                "rgb": r_rgb,
+                "alb": r_alb,
+                "norm": r_norm
+            })
 
         # Plot qualitative comparisons grid
-        fig, axes = plt.subplots(3, 3, figsize=(11, 8.5))
+        num_rows = 1 + len(runs)
+        fig_height = 2.5 * num_rows
+        fig, axes = plt.subplots(num_rows, 3, figsize=(11, fig_height))
+        
+        # Ensure axes is always a 2D array
+        if num_rows == 1:
+            axes = np.expand_dims(axes, axis=0)
+
         fig.suptitle("Qualitative Prior and Reconstruction Quality Comparison", fontsize=14, fontweight="bold", y=0.98)
         fig.patch.set_facecolor("#FAFAFA")
 
@@ -421,42 +602,29 @@ def main():
         axes[0, 2].set_title("GT Normal Prior")
         axes[0, 2].axis("off")
 
-        # Baseline row
-        if r_rgb_a:
-            axes[1, 0].imshow(r_rgb_a)
-        axes[1, 0].set_title(f"{args.name_a} RGB")
-        axes[1, 0].axis("off")
-        
-        if r_alb_a:
-            axes[1, 1].imshow(r_alb_a)
-        axes[1, 1].set_title(f"{args.name_a} Albedo")
-        axes[1, 1].axis("off")
-        
-        if r_norm_a:
-            axes[1, 2].imshow(r_norm_a)
-        axes[1, 2].set_title(f"{args.name_a} Normal")
-        axes[1, 2].axis("off")
-
-        # Proposed row
-        if r_rgb_b:
-            axes[2, 0].imshow(r_rgb_b)
-        axes[2, 0].set_title(f"{args.name_b} RGB")
-        axes[2, 0].axis("off")
-        
-        if r_alb_b:
-            axes[2, 1].imshow(r_alb_b)
-        axes[2, 1].set_title(f"{args.name_b} Albedo")
-        axes[2, 1].axis("off")
-        
-        if r_norm_b:
-            axes[2, 2].imshow(r_norm_b)
-        axes[2, 2].set_title(f"{args.name_b} Normal")
-        axes[2, 2].axis("off")
+        # Run rows
+        for i, vis in enumerate(run_visuals):
+            row_idx = i + 1
+            
+            if vis["rgb"]:
+                axes[row_idx, 0].imshow(vis["rgb"])
+            axes[row_idx, 0].set_title(f"{vis['name']} RGB")
+            axes[row_idx, 0].axis("off")
+            
+            if vis["alb"]:
+                axes[row_idx, 1].imshow(vis["alb"])
+            axes[row_idx, 1].set_title(f"{vis['name']} Albedo")
+            axes[row_idx, 1].axis("off")
+            
+            if vis["norm"]:
+                axes[row_idx, 2].imshow(vis["norm"])
+            axes[row_idx, 2].set_title(f"{vis['name']} Normal")
+            axes[row_idx, 2].axis("off")
 
         # Style row labels with bounding boxes
-        row_labels = ["Ground Truth", args.name_a, args.name_b]
-        row_colors = [COLORS["gt"], COLORS["a"], COLORS["b"]]
-        for row in range(3):
+        row_labels = ["Ground Truth"] + [vis["name"] for vis in run_visuals]
+        row_colors = ["#4CAF50"] + [vis["color"] for vis in run_visuals]
+        for row in range(num_rows):
             bbox = axes[row, 0].get_position()
             y_center = (bbox.y0 + bbox.y1) / 2
             fig.text(0.04, y_center, row_labels[row], fontsize=11, fontweight="bold",
