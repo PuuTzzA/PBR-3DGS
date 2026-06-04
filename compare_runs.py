@@ -285,6 +285,30 @@ def main():
             break
     dataset_name = os.path.basename(os.path.normpath(resolved_dataset)) if resolved_dataset else "Unknown"
 
+    # Find common HDRIs evaluated for relighting across all runs
+    def get_evaluated_hdris(metrics_log):
+        hdris = set()
+        for entry in metrics_log:
+            for key in entry.keys():
+                if key.startswith("relight_") and key.endswith("_psnr"):
+                    hdri_name = key[len("relight_"):-len("_psnr")]
+                    hdris.add(hdri_name)
+        return hdris
+
+    common_hdris = None
+    for run in runs:
+        run_hdris = get_evaluated_hdris(run["metrics"])
+        if common_hdris is None:
+            common_hdris = run_hdris
+        else:
+            common_hdris = common_hdris.intersection(run_hdris)
+    common_hdris = sorted(list(common_hdris)) if common_hdris else []
+    
+    if common_hdris:
+        print(f"Found common HDRIs for relighting comparison: {common_hdris}")
+    else:
+        print("No common HDRIs found for relighting comparison.")
+
     # Start PDF generation
     print(f"Generating PDF report: {args.output_pdf}")
     with PdfPages(args.output_pdf) as pdf:
@@ -379,6 +403,9 @@ def main():
             ("test_albedo_psnr", "Albedo PSNR (dB) ↑", True),
             ("test_normal_ang_err", "Normal Angular Error (deg) ↓", False),
         ]
+        for hdri in common_hdris:
+            metrics_def.append((f"relight_{hdri}_psnr", f"Relight PSNR ({hdri}) (dB) ↑", True))
+            metrics_def.append((f"relight_{hdri}_ssim", f"Relight SSIM ({hdri}) ↑", True))
 
         metrics_table_data = []
         for key, name, higher_better in metrics_def:
@@ -408,7 +435,10 @@ def main():
                            colWidths=col_widths)
         m_table.auto_set_font_size(False)
         m_table.set_fontsize(10)
-        m_table.scale(1.0, 1.8)
+        
+        # Dynamically scale vertical scaling to prevent table overlap with more rows
+        table_scale_y = max(1.0, 1.8 - 0.05 * (len(metrics_table_data) - 5))
+        m_table.scale(1.0, table_scale_y)
 
         # Style metrics table
         for j in range(len(m_header)):
@@ -423,8 +453,8 @@ def main():
                 else:
                     m_table[i, j].set_facecolor("#F5F5F5" if i % 2 == 0 else "white")
 
-        # Quantitative text findings
-        findings_y = 0.20
+        # Quantitative text findings - shift down dynamically based on table size
+        findings_y = max(0.05, 0.18 - 0.015 * len(common_hdris))
         ax.text(0.05, findings_y, "Key Findings & Analysis:", fontsize=12, fontweight="bold",
                 ha="left", va="top", transform=ax.transAxes, color="#1A1A2E")
         
@@ -451,6 +481,13 @@ def main():
             if psnr_a is not None and psnr_b is not None:
                 diff = psnr_b - psnr_a
                 analysis_text += f"• **Overall RGB Novel-View Synthesis:** Novel-view synthesis PSNR changes by **{diff:+.2f} dB** ({run_a['name']}: **{psnr_a:.2f} dB** vs {run_b['name']}: **{psnr_b:.2f} dB**).\n"
+
+            for hdri in common_hdris:
+                r_psnr_a = final_a.get(f"relight_{hdri}_psnr")
+                r_psnr_b = final_b.get(f"relight_{hdri}_psnr")
+                if r_psnr_a is not None and r_psnr_b is not None:
+                    diff = r_psnr_b - r_psnr_a
+                    analysis_text += f"• **Relighting under {hdri}:** PSNR changes by **{diff:+.2f} dB** ({run_a['name']}: **{r_psnr_a:.2f} dB** vs {run_b['name']}: **{r_psnr_b:.2f} dB**).\n"
         else:
             analysis_text = "• Comparative metrics show training progress for the loaded run."
             
@@ -491,9 +528,55 @@ def main():
 
         # Save individual PNGs for convergence curves
         save_single_metric_plot("test_psnr", "PSNR (dB)", "Novel-View RGB PSNR", "novel_view_rgb_psnr.png", higher_better=True)
-        save_single_metric_plot("test_albedo_psnr", "PSNR (dB)", "Albedo PSNR", "albedo_psnr.png", higher_better=True)
+        save_single_metric_plot("test_albedo_psnr", "PSNR (dB)", "Albedo Prior PSNR", "albedo_psnr.png", higher_better=True)
         save_single_metric_plot("test_normal_ang_err", "Degrees (°)", "Normal Angular Error", "normal_angular_error.png", higher_better=False)
         save_single_metric_plot("train_loss", "Loss (EMA)", "Training Loss", "training_loss.png", higher_better=False)
+
+        # ─── Page 3b: Relighting Curves (if common HDRIs exist) ───
+        if common_hdris:
+            fig, axes = plt.subplots(1, 2, figsize=(11, 8.5))
+            fig.suptitle("Relighting Performance Curves Over Training", fontsize=14, fontweight="bold", y=0.98)
+            fig.patch.set_facecolor("#FAFAFA")
+            
+            marker_styles = ["o", "s", "^", "v", "<", ">", "d"]
+            # PSNR Plot
+            ax_psnr = axes[0]
+            for run in runs:
+                for h_idx, hdri in enumerate(common_hdris):
+                    iters, vals = extract_metric(run["metrics"], f"relight_{hdri}_psnr")
+                    if iters:
+                        label = f"{run['name']} - {hdri} (final: {vals[-1]:.2f})"
+                        marker = marker_styles[h_idx % len(marker_styles)]
+                        ax_psnr.plot(iters, vals, marker=marker, linestyle="-", color=run["color"], markersize=4, linewidth=1.2, label=label)
+            ax_psnr.set_xlabel("Iteration")
+            ax_psnr.set_ylabel("PSNR (dB)")
+            ax_psnr.set_title("Relighting PSNR ↑")
+            ax_psnr.legend(loc="best", fontsize=8)
+            ax_psnr.grid(True, alpha=0.3, linestyle="--")
+
+            # SSIM Plot
+            ax_ssim = axes[1]
+            for run in runs:
+                for h_idx, hdri in enumerate(common_hdris):
+                    iters, vals = extract_metric(run["metrics"], f"relight_{hdri}_ssim")
+                    if iters:
+                        label = f"{run['name']} - {hdri} (final: {vals[-1]:.4f})"
+                        marker = marker_styles[h_idx % len(marker_styles)]
+                        ax_ssim.plot(iters, vals, marker=marker, linestyle="-", color=run["color"], markersize=4, linewidth=1.2, label=label)
+            ax_ssim.set_xlabel("Iteration")
+            ax_ssim.set_ylabel("SSIM")
+            ax_ssim.set_title("Relighting SSIM ↑")
+            ax_ssim.legend(loc="best", fontsize=8)
+            ax_ssim.grid(True, alpha=0.3, linestyle="--")
+
+            fig.tight_layout(rect=[0, 0, 1, 0.95])
+            pdf.savefig(fig, bbox_inches="tight")
+            plt.close(fig)
+
+            # Save individual PNGs for common HDRIs
+            for hdri in common_hdris:
+                save_single_metric_plot(f"relight_{hdri}_psnr", "PSNR (dB)", f"Relighting PSNR under {hdri}", f"relight_{hdri}_psnr.png", higher_better=True)
+                save_single_metric_plot(f"relight_{hdri}_ssim", "SSIM", f"Relighting SSIM under {hdri}", f"relight_{hdri}_ssim.png", higher_better=True)
 
         # ─── Page 4: Uncertainty Weights Evolution ───
         fig, axes = plt.subplots(1, 3, figsize=(18, 5))
@@ -634,6 +717,110 @@ def main():
         plt.tight_layout(rect=[0.08, 0, 1, 0.94])
         pdf.savefig(fig, dpi=150)
         plt.close(fig)
+
+        # ─── Page 6+: Relighting Visual Comparisons (per common HDRI) ───
+        for hdri in common_hdris:
+            # Let's find the views evaluated under this HDRI for the last iteration
+            # We can inspect the first run's folder to find the available view names
+            first_run = runs[0]
+            first_max_iter = max_iters[0]
+            hdri_vis_path = os.path.join(first_run["folder"], "eval_visuals", f"relight_{hdri}")
+            
+            # Find render files
+            render_pattern = os.path.join(hdri_vis_path, "*_render.png")
+            render_files = sorted(glob.glob(render_pattern))
+            
+            # Extract view names for the latest iteration in the folder
+            view_names = []
+            if render_files:
+                # Find the largest iteration number present in the filenames
+                iters_found = []
+                for rf in render_files:
+                    match_iter = re.search(r"iter(\d+)_", os.path.basename(rf))
+                    if match_iter:
+                        iters_found.append(int(match_iter.group(1)))
+                latest_iter = max(iters_found) if iters_found else first_max_iter
+                
+                # Filter render files to only those from the latest iteration
+                latest_pattern = f"iter{latest_iter:06d}_"
+                for rf in render_files:
+                    if latest_pattern in os.path.basename(rf):
+                        basename = os.path.basename(rf)
+                        match = re.match(r"iter\d+_(.*)_render\.png", basename)
+                        if match:
+                            view_names.append(match.group(1))
+            
+            # Limit to at most 3 views to avoid extremely long reports
+            view_names = view_names[:3]
+            
+            if not view_names:
+                continue
+                
+            num_views = len(view_names)
+            num_cols = 1 + len(runs) # GT + number of runs
+            fig_height = 2.5 * num_views
+            fig, axes = plt.subplots(num_views, num_cols, figsize=(11, fig_height))
+            
+            # Ensure axes is 2D
+            if num_views == 1:
+                axes = np.expand_dims(axes, axis=0)
+            if num_cols == 1:
+                axes = np.expand_dims(axes, axis=-1)
+                
+            fig.suptitle(f"Relighting Quality Comparison: {hdri}", fontsize=14, fontweight="bold", y=0.98)
+            fig.patch.set_facecolor("#FAFAFA")
+            
+            for v_idx, view_name in enumerate(view_names):
+                # 1. Load Ground Truth
+                # We search across all runs to find the GT image for this view under this HDRI
+                gt_image = None
+                for run, max_iter in zip(runs, max_iters):
+                    gt_path = os.path.join(run["folder"], "eval_visuals", f"relight_{hdri}", f"iter{max_iter:06d}_{view_name}_gt.png")
+                    if os.path.exists(gt_path):
+                        try:
+                            gt_image = Image.open(gt_path)
+                            break
+                        except Exception:
+                            pass
+                
+                # Plot GT in the first column
+                ax_gt = axes[v_idx, 0]
+                if gt_image is not None:
+                    ax_gt.imshow(gt_image)
+                else:
+                    ax_gt.text(0.5, 0.5, "GT N/A", ha="center", va="center", transform=ax_gt.transAxes, color="gray", fontsize=12)
+                ax_gt.set_title(f"GT — {view_name}")
+                ax_gt.axis("off")
+                
+                # 2. Load and plot each run's rendering
+                for r_idx, (run, max_iter) in enumerate(zip(runs, max_iters)):
+                    rend_path = os.path.join(run["folder"], "eval_visuals", f"relight_{hdri}", f"iter{max_iter:06d}_{view_name}_render.png")
+                    rend_image = None
+                    if os.path.exists(rend_path):
+                        try:
+                            rend_image = Image.open(rend_path)
+                        except Exception:
+                            pass
+                            
+                    ax_rend = axes[v_idx, 1 + r_idx]
+                    if rend_image is not None:
+                        ax_rend.imshow(rend_image)
+                    else:
+                        ax_rend.text(0.5, 0.5, "N/A", ha="center", va="center", transform=ax_rend.transAxes, color="gray", fontsize=12)
+                    ax_rend.set_title(f"{run['name']} — {view_name}")
+                    ax_rend.axis("off")
+            
+            # Add row labels
+            for v_idx, view_name in enumerate(view_names):
+                bbox = axes[v_idx, 0].get_position()
+                y_center = (bbox.y0 + bbox.y1) / 2
+                fig.text(0.04, y_center, view_name, fontsize=10, fontweight="bold",
+                         ha="center", va="center", rotation=90, color="white",
+                         bbox=dict(boxstyle="round,pad=0.3", facecolor="#37474F", alpha=0.9))
+                         
+            plt.tight_layout(rect=[0.08, 0, 1, 0.94])
+            pdf.savefig(fig, dpi=150)
+            plt.close(fig)
 
     print(f"\n✓ Comparison report successfully generated and saved to: {args.output_pdf}")
 
