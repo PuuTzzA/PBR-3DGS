@@ -144,14 +144,6 @@ def split_grid_image(path):
         print(f"Warning: Failed to split grid image {path}: {e}")
         return None, None
 
-def extract_loss_component(loss_components, key):
-    """Extract iterations and values for a loss component key."""
-    iters, vals = [], []
-    for entry in loss_components:
-        if key in entry and entry[key] is not None:
-            iters.append(entry["iteration"])
-            vals.append(entry[key])
-    return iters, vals
 
 def main():
     parser = argparse.ArgumentParser(description="Generate PBR-3DGS/GIR Run Comparison PDF Report")
@@ -227,49 +219,13 @@ def main():
         fig_single.savefig(os.path.join(out_dir, filename), dpi=150)
         plt.close(fig_single)
 
-    # Helper to save a single weight plot as a PNG
-    def save_single_weight_plot(key, ylabel, title, filename):
-        fig_single, ax_single = plt.subplots(figsize=(8, 6))
-        fig_single.patch.set_facecolor("#FAFAFA")
-        
-        has_data = False
-        for run in runs:
-            iters, vals = extract_loss_component(run["loss_components"], key)
-            if iters:
-                label = f"{run['name']} (final: {vals[-1]:.3f})"
-                ax_single.plot(iters, vals, "-", color=run["color"], linewidth=2.0, label=label)
-                has_data = True
-        
-        ax_single.set_xlabel("Iteration")
-        ax_single.set_ylabel(ylabel)
-        ax_single.set_title(title, fontsize=12, fontweight="bold")
-        ax_single.grid(True, alpha=0.3, linestyle="--")
-        
-        if has_data:
-            ax_single.legend(loc="best")
-        else:
-            ax_single.text(0.5, 0.5, "No uncertainty weight data logged for this run / constant 0.0",
-                           ha="center", va="center", transform=ax_single.transAxes, color="gray", fontsize=10)
-        
-        fig_single.tight_layout()
-        fig_single.savefig(os.path.join(out_dir, filename), dpi=150)
-        plt.close(fig_single)
+
 
     # Load configurations, metrics, and loss logs
     for run in runs:
         folder = run["folder"]
         run["cfg"] = parse_cfg_args(os.path.join(folder, "cfg_args"))
         run["metrics"] = load_metrics_log(folder)
-        
-        # Load loss components if they exist (for uncertainty weights)
-        loss_components_path = os.path.join(folder, "train_process", "loss_components.json")
-        run["loss_components"] = []
-        if os.path.exists(loss_components_path):
-            try:
-                with open(loss_components_path, "r") as f:
-                    run["loss_components"] = json.load(f)
-            except Exception as e:
-                print(f"Warning: Failed to load loss components from {loss_components_path}: {e}")
 
     valid_runs = [r for r in runs if r["metrics"]]
     if not valid_runs:
@@ -332,7 +288,8 @@ def main():
 
         # Collect keys that differ or are critical
         critical_keys = ["iterations", "first_stage_step", "second_stage_step", "exclude_prior_loss", 
-                         "lambda_albedo_gt", "lambda_normal_gt", "lambda_metallic_gt"]
+                         "lambda_albedo_gt", "lambda_normal_gt", "lambda_metallic_gt", "lambda_roughness_gt",
+                         "use_prior_weight_scheduler", "prior_weight_scheduler_ratio"]
         all_keys = set()
         for run in runs:
             all_keys.update(run["cfg"].keys())
@@ -578,47 +535,7 @@ def main():
                 save_single_metric_plot(f"relight_{hdri}_psnr", "PSNR (dB)", f"Relighting PSNR under {hdri}", f"relight_{hdri}_psnr.png", higher_better=True)
                 save_single_metric_plot(f"relight_{hdri}_ssim", "SSIM", f"Relighting SSIM under {hdri}", f"relight_{hdri}_ssim.png", higher_better=True)
 
-        # ─── Page 4: Uncertainty Weights Evolution ───
-        fig, axes = plt.subplots(1, 3, figsize=(18, 5))
-        fig.suptitle("Kendall Uncertainty Weights Evolution Over Iterations", fontsize=16, fontweight="bold", y=0.98)
-        fig.patch.set_facecolor("#FAFAFA")
-
-        weight_keys = [
-            ("w_albedo", "Albedo Weight (w_albedo)", "Albedo Uncertainty Weight"),
-            ("w_metallic", "Metallic Weight (w_metallic)", "Metallic Uncertainty Weight"),
-            ("w_normal", "Normal Weight (w_normal)", "Normal Uncertainty Weight"),
-        ]
-
-        for idx, (key, ylabel, title) in enumerate(weight_keys):
-            ax = axes[idx]
-            has_data = False
-            for run in runs:
-                iters, vals = extract_loss_component(run["loss_components"], key)
-                if iters:
-                    label = f"{run['name']} (final: {vals[-1]:.3f})"
-                    ax.plot(iters, vals, "-", color=run["color"], linewidth=1.5, label=label)
-                    has_data = True
-            
-            ax.set_xlabel("Iteration")
-            ax.set_ylabel(ylabel)
-            ax.set_title(title, fontsize=11, fontweight="semibold")
-            ax.grid(True, alpha=0.3, linestyle="--")
-            if has_data:
-                ax.legend(loc="best", fontsize=8)
-            else:
-                ax.text(0.5, 0.5, "No uncertainty weight data logged for this run / constant 0.0",
-                        ha="center", va="center", transform=ax.transAxes, color="gray", fontsize=9)
-
-        fig.tight_layout(rect=[0, 0, 1, 0.92])
-        pdf.savefig(fig, bbox_inches="tight")
-        plt.close(fig)
-
-        # Save individual PNGs for weights
-        save_single_weight_plot("w_albedo", "Albedo Weight (w_albedo)", "Albedo Uncertainty Weight Evolution", "uncertainty_weight_albedo.png")
-        save_single_weight_plot("w_metallic", "Metallic Weight (w_metallic)", "Metallic Uncertainty Weight Evolution", "uncertainty_weight_metallic.png")
-        save_single_weight_plot("w_normal", "Normal Weight (w_normal)", "Normal Uncertainty Weight Evolution", "uncertainty_weight_normal.png")
-
-        # ─── Page 5: Visual Reconstruction Comparison Grid (RGB, Albedo, Normal) ───
+        # ─── Page 4: Visual Reconstruction Comparison Grid (RGB, Albedo, Normal) ───
         print("Locating visual comparisons...")
         
         max_iters = []
@@ -718,7 +635,7 @@ def main():
         pdf.savefig(fig, dpi=150)
         plt.close(fig)
 
-        # ─── Page 6+: Relighting Visual Comparisons (per common HDRI) ───
+        # ─── Page 5+: Relighting Visual Comparisons (per common HDRI) ───
         for hdri in common_hdris:
             # Let's find the views evaluated under this HDRI for the last iteration
             # We can inspect the first run's folder to find the available view names
