@@ -1,0 +1,85 @@
+# =============================================================================
+# Split-training sync workflow
+#   This machine : ~/PBR-3DGS/PBR-3DGS/
+#   Other machine: ~/PBR-3DGS/   (host: tputzer@tuini15-vc18.vc.in.tum.de)
+#   Adjust the remote root below if it is /PBR-3DGS instead of ~/PBR-3DGS.
+# Trailing slash on the source = copy the *contents* into the dest.
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# PHASE 1 — Push code changes to the other machine
+#   Excludes outputs / git / heavy data so only code+config is shipped.
+#   Dry-run first (-n) to preview, then remove -n to run for real.
+# -----------------------------------------------------------------------------
+rsync -avzP -n \
+  --exclude 'outputs/' \
+  --exclude '.git/' \
+  --exclude 'data/' \
+  --exclude 'datasets/' \
+  --exclude 'GIR_Reference/' \
+  --exclude '*.ply' \
+  --exclude '*.pth' \
+  --exclude '*.ckpt' \
+  --exclude '__pycache__/' \
+  ~/PBR-3DGS/PBR-3DGS/ \
+  tputzer@tuini15-vc18.vc.in.tum.de:PBR-3DGS/
+
+rsync -avzP --delete \
+  --exclude 'outputs/' \
+  --exclude '.git/' \
+  --exclude 'data/' \
+  --exclude 'datasets/' \
+  --exclude 'GIR_Reference/' \
+  --exclude '*.ply' \
+  --exclude '*.pth' \
+  --exclude '*.ckpt' \
+  --exclude '__pycache__/' \
+  ~/PBR-3DGS/PBR-3DGS/ \
+  tputzer@tuini15-vc18.vc.in.tum.de:PBR-3DGS/
+
+# Optional: exact mirror of the code tree (does NOT touch remote outputs/,
+# since outputs/ is excluded). Use only if you want stale remote files removed.
+rsync -avzP --delete \
+  --exclude 'outputs/' \
+  --exclude '.git/' \
+  --exclude 'data/' \
+  --exclude 'datasets/' \
+  --exclude '*.ply' \
+  --exclude '*.pth' \
+  --exclude '*.ckpt' \
+  --exclude '__pycache__/' \
+  ~/PBR-3DGS/PBR-3DGS/ \
+  tputzer@tuini15-vc18.vc.in.tum.de:PBR-3DGS/
+
+
+# -----------------------------------------------------------------------------
+# PHASE 2 — Run the split (manual)
+#   Here : run your chosen subset via run_experiments.py as usual.
+#   There: ssh in and run the OTHER subset.
+#   Keep experiment sets disjoint so outputs/ subfolders never collide.
+# -----------------------------------------------------------------------------
+# ssh tputzer@tuini15-vc18.vc.in.tum.de
+# cd ~/PBR-3DGS
+# # run selected experiments here
+
+
+# -----------------------------------------------------------------------------
+# PHASE 3 — Pull the other machine's results back here
+#   NO --delete: merges remote experiments into local outputs/ without
+#   wiping the runs you did locally. Dry-run (-n) first if unsure.
+# -----------------------------------------------------------------------------
+rsync -avzP -n \
+  tputzer@tuini15-vc18.vc.in.tum.de:PBR-3DGS/outputs/ \
+  ~/PBR-3DGS/PBR-3DGS/outputs/
+
+rsync -avzP \
+  tputzer@tuini15-vc18.vc.in.tum.de:PBR-3DGS/outputs/ \
+  ~/PBR-3DGS/PBR-3DGS/outputs/
+
+
+# =============================================================================
+# Reference — older one-off push commands (presentation outputs -> /mnt/hdd)
+# =============================================================================
+# rsync -avzP ~/PBR-3DGS/PBR-3DGS/outputs/new_experiments_try_4_presentation tputzer@tuini15-vc18.vc.in.tum.de:/mnt/hdd/
+# rsync -avzP --delete ~/PBR-3DGS/PBR-3DGS/outputs/new_experiments_try_4_presentation tputzer@tuini15-vc18.vc.in.tum.de:/mnt/hdd/
