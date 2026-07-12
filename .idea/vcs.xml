@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="VcsDirectoryMappings">
+    <mapping directory="" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/GIR" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/GIR/nvdiffrast" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/prior_extractors/DiffusionRenderer" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/prior_extractors/RGB-X" vcs="Git" />
+  </component>
+</project>

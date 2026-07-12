@@ -1,3 +1,0 @@
-requests 
-huggingface_hub 
-tqdm

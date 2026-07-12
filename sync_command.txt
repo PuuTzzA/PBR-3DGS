@@ -7,6 +7,10 @@
 # =============================================================================
 
 
+rsync -avzP -n ~/PBR-3DGS/PBR-3DGS/outputs/poster_results/ tputzer@tuini15-vc18.vc.in.tum.de:/mnt/hdd
+
+rsync -avzP -n  tputzer@tuini15-vc18.vc.in.tum.de:/mnt/hdd/hotdog_things_to_run_cosmos/ ~/PBR-3DGS/PBR-3DGS/data/second_scene_raw
+
 # -----------------------------------------------------------------------------
 # PHASE 1 — Push code changes to the other machine
 #   Excludes outputs / git / heavy data so only code+config is shipped.
