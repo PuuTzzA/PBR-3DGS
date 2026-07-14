@@ -81,7 +81,7 @@ python relight_all.py --model_path ./GIR/output_model --env_path /path/to/env_ma
 ---
 
 ## GIR Baseline Integration
-This codebase is developed as an extension of the Gaussian Inverse Rendering (GIR) framework. For details, licenses, and documentation specific to the original GIR base codebase, please refer to the base project guide at [GIR/README.md](GIR/README.md).
+This codebase is developed as an extension of the Gaussian Inverse Rendering (GIR) framework. For details, licenses, and documentation specific to the base GIR codebase, please refer to the repository at [PuuTzzA/GIR](https://github.com/PuuTzzA/GIR).
 
 ---
 
