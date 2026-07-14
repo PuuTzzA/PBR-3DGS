@@ -405,14 +405,19 @@ section.section:nth-of-type(even) {
   border-bottom: 1.5px solid var(--text-primary);
 }
 
+.latex-table th, .latex-table td {
+  padding: 0.6rem 0.75rem;
+  text-align: center;
+  vertical-align: middle;
+  border: none;
+}
+
 .latex-table th {
   font-weight: 600;
   color: var(--text-primary);
-  padding: 0.75rem 0.5rem;
-  vertical-align: middle;
 }
 
-/* Left align method name column */
+/* Left align method name column and adjust padding */
 .latex-table th:first-child,
 .latex-table td:first-child {
   text-align: left;
@@ -420,8 +425,6 @@ section.section:nth-of-type(even) {
 }
 
 .latex-table td {
-  padding: 0.8rem 0.5rem;
-  text-align: center;
   color: var(--text-secondary);
   border-bottom: 1px solid rgba(15, 23, 42, 0.05);
 }
@@ -445,10 +448,9 @@ section.section:nth-of-type(even) {
   font-weight: 700;
 }
 
-/* LaTeX group borders and padding alignment */
+/* Clean vertical line separators at group boundaries */
 .latex-table .latex-group-start {
   border-left: 1.5px solid rgba(15, 23, 42, 0.1) !important;
-  padding-left: 1.5rem !important;
 }
 
 
