@@ -3,7 +3,7 @@
 This repository contains the official implementation of **3D Gaussian Inverse Rendering with Diffusion Priors**.
 
 [![Project Page](https://img.shields.io/badge/Project-Website-blue?style=flat-square)](https://PuuTzzA.github.io/PBR-3DGS/)
-[![Paper](https://img.shields.io/badge/Paper-PDF-red?style=flat-square)](https://PuuTzzA.github.io/PBR-3DGS/static/paper.pdf)
+[![Paper](https://img.shields.io/badge/Paper-PDF-red?style=flat-square)](docs/static/paper/ADL4CV-Paper.pdf)
 [![Poster](https://img.shields.io/badge/Poster-PDF-orange?style=flat-square)](docs/static/poster/ADL4CV-Poster.pdf)
 
 ---
