@@ -1,0 +1,25 @@
+name: gir
+channels:
+  - defaults
+dependencies:
+  - python=3.10
+  - pip:
+      - ninja
+      - setuptools==69.5.1
+      - "numpy<2.0.0"
+      - tqdm
+      - plyfile
+      - "imageio[full]"
+      - imageio-ffmpeg
+      - scipy
+      - matplotlib
+      - pillow
+      - pyyaml
+      - tensorboard
+      - einops
+      - plyfile
+      - tabulate
+      - torch==2.2.2+cu121
+      - torchvision==0.17.2+cu121
+      - torchaudio==2.2.2+cu121
+
