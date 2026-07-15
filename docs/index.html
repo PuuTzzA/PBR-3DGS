@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="description" content="3D Gaussian Inverse Rendering with Diffusion Priors. Resolving the albedo-lighting ambiguity in GIR using GT and diffusion priors.">
+  <meta name="keywords" content="3D Gaussian Splatting, Inverse Rendering, Relighting, Diffusion Priors, PBR">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>3D Gaussian Inverse Rendering with Diffusion Priors</title>
+
+  <!-- Google Fonts & FontAwesome -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
+  
+  <!-- Custom Stylesheets -->
+  <link rel="stylesheet" href="static/css/index.css">
+
+  <!-- MathJax -->
+  <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+</head>
+
+<body>
+
+  <!-- NAVBAR -->
+  <nav class="navbar is-fixed-top" role="navigation" aria-label="main navigation">
+    <div class="container">
+      <div class="navbar-brand">
+        <a class="navbar-item" href="https://niessner.github.io/ADL4CV/" target="_blank" style="padding: 0.1rem 0.75rem;">
+          <img src="static/images/adl4cv.png" alt="ADL4CV Logo" style="max-height: 58px; width: auto; display: block;">
+        </a>
+      </div>
+      <div class="navbar-menu">
+        <div class="navbar-end">
+          <a class="navbar-item" href="#abstract">Abstract & Method</a>
+          <a class="navbar-item" href="#albedo-grid">Visual Results</a>
+          <a class="navbar-item" href="#evaluation">Quantitative Results</a>
+          <a class="navbar-item" href="static/paper/ADL4CV-Paper.pdf" target="_blank">Paper</a>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <!-- HERO SECTION -->
+  <section class="hero">
+    <div class="hero-body">
+      <div class="container is-max-desktop">
+        <div class="columns is-centered">
+          <div class="column has-text-centered">
+            <h1 class="title publication-title">
+              3D Gaussian Inverse Rendering with Diffusion Priors
+            </h1>
+            
+            <div class="publication-authors">
+              <span class="author-block">
+                Thomas Putzer,
+              </span>
+              <span class="author-block">
+                Lukas Jochim
+              </span>
+            </div>
+
+            <div class="publication-institutions">
+              <span class="author-block">Technical University of Munich</span>
+            </div>
+
+            <div class="publication-links">
+              <!-- Code Link -->
+              <span class="link-block">
+                <a href="https://github.com/PuuTzzA/PBR-3DGS" target="_blank">
+                  <span class="icon">
+                    <i class="fab fa-github"></i>
+                  </span>
+                  <span>Code</span>
+                </a>
+              </span>
+              <!-- Paper Link -->
+              <span class="link-block">
+                <a href="static/paper/ADL4CV-Paper.pdf" target="_blank">
+                  <span class="icon">
+                    <i class="fas fa-file-pdf"></i>
+                  </span>
+                  <span>Paper</span>
+                </a>
+              </span>
+              <!-- Poster Link -->
+              <span class="link-block">
+                <a href="static/poster/ADL4CV-Poster.pdf" target="_blank">
+                  <span class="icon">
+                    <i class="far fa-image"></i>
+                  </span>
+                  <span>Poster</span>
+                </a>
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ABSTRACT & METHOD -->
+  <section class="section" id="abstract">
+    <div class="container is-max-desktop">
+      <h2 class="title is-3 has-text-centered mb-2" style="font-family: 'Outfit', sans-serif;">Abstract</h2>
+      <hr style="height: 1.5px; background-color: rgba(15, 23, 42, 0.1); border: none; margin: 0.5rem 0 1.5rem 0;">
+      
+      <div class="content has-text-justified">
+        <p>
+          Gaussian Inverse Rendering (GIR) decomposes multi-view images of a scene into 3D Gaussians carrying Physically Based Rendering (PBR) materials—such as albedo, metallic, roughness—along with learned environment lighting. However, optimizing this decomposition solely through a photometric loss leads to a severe <strong>albedo-lighting ambiguity</strong>: the environment map and surface albedo can trade off brightness and color freely, resulting in baked-in illumination and physically incorrect material properties.
+        </p>
+        <p>
+          We resolve this ambiguity by introducing a prior-guided supervision pipeline that leverages both multi-view <strong>ground-truth</strong> priors and <strong>diffusion-model priors</strong> (using NVIDIA DiffusionRenderer). By combining these with a multi-phase training schedule and a custom Light-Linear Indirect Illumination (LLI) model, our pipeline guides geometry optimization, aligns normals, and separates reflectance features cleanly. The result is a robust, physically accurate factorization that enables high-fidelity relighting under novel environment maps.
+        </p>
+      </div>
+
+      <div class="has-text-centered my-6">
+        <img src="static/images/method.png" alt="Methodology Pipeline Overview" style="max-width: 85%; display: block; margin: 0 auto;">
+      </div>
+
+      <!-- Method Caption -->
+      <div class="content has-text-justified has-text-grey is-size-6" style="color: #71717a !important; line-height: 1.5;">
+        <p>
+          <strong>Method overview.</strong> Our pipeline integrates multi-view supervision across a multi-phase curriculum. First, a <strong>Geometry Warm-up phase</strong> initializes the scene using flat albedo priors. Second, a <strong>Normal Alignment phase</strong> enforces consistency of the surface geometry. Finally, a <strong>Full PBR Optimization</strong> stage coordinates the materials with our <strong>Light-Linear Indirect Illumination (LLI)</strong> model, scaling specular and diffuse indirect terms based on environment map radiance for energy-consistent relighting.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ALBEDO RECONSTRUCTION GRID -->
+  <section class="section" id="albedo-grid">
+    <div class="container" style="max-width: 920px;">
+      <h2 class="title is-3 has-text-centered mb-2" style="font-family: 'Outfit', sans-serif;">Albedo Reconstruction Results</h2>
+      <hr style="height: 1.5px; background-color: rgba(15, 23, 42, 0.1); border: none; margin: 0.5rem 0 1.5rem 0;">
+
+      <!-- Minimalist Controls Panel -->
+      <div class="is-flex is-justify-content-space-between is-align-items-center mb-5" style="border-bottom: 1px solid var(--border-color); padding-bottom: 0.75rem;">
+        <!-- Left: Scene Toggle -->
+        <div class="toggle-buttons">
+          <button class="toggle-btn active" data-albedo-scene="lego">Lego</button>
+          <button class="toggle-btn" data-albedo-scene="hotdog">Hotdog</button>
+        </div>
+        <!-- Right: Playback Toggle -->
+        <button class="toggle-btn" id="albedo-play-pause-btn" style="min-width: 100px;">
+          <span class="icon mr-1"><i class="fa-solid fa-pause"></i></span>
+          <span class="btn-text">Pause</span>
+        </button>
+      </div>
+
+      <div class="columns is-mobile mb-6">
+        <!-- Baseline -->
+        <div class="column">
+          <div class="video-wrapper">
+            <div class="video-loader"></div>
+            <video class="albedo-grid-el" data-model="baseline" autoplay loop muted playsinline style="width: 100%; display: block;">
+              <source src="static/videos/lego_baseline_albedo.mp4" type="video/mp4">
+            </video>
+          </div>
+          <p class="has-text-centered is-size-7 has-text-grey mt-2">Baseline (GIR)</p>
+        </div>
+        <!-- Ours (Diffusion) -->
+        <div class="column">
+          <div class="video-wrapper">
+            <div class="video-loader"></div>
+            <video class="albedo-grid-el" data-model="diff_prior" autoplay loop muted playsinline style="width: 100%; display: block;">
+              <source src="static/videos/lego_diff_prior_albedo.mp4" type="video/mp4">
+            </video>
+          </div>
+          <p class="has-text-centered is-size-7 has-text-grey mt-2">Ours (Diffusion)</p>
+        </div>
+        <!-- Ours (GT Priors) -->
+        <div class="column">
+          <div class="video-wrapper">
+            <div class="video-loader"></div>
+            <video class="albedo-grid-el" data-model="gt_prior" autoplay loop muted playsinline style="width: 100%; display: block;">
+              <source src="static/videos/lego_gt_prior_albedo.mp4" type="video/mp4">
+            </video>
+          </div>
+          <p class="has-text-centered is-size-7 has-text-grey mt-2">Ours (GT Priors)</p>
+        </div>
+        <!-- Ground Truth -->
+        <div class="column">
+          <div class="video-wrapper">
+            <div class="video-loader"></div>
+            <video class="albedo-grid-el" data-model="gt" autoplay loop muted playsinline style="width: 100%; display: block;">
+              <source src="static/videos/lego_gt_albedo.mp4" type="video/mp4">
+            </video>
+          </div>
+          <p class="has-text-centered is-size-7 has-text-grey mt-2">Ground Truth</p>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- RELIGHTING VIDEO GRID -->
+  <section class="section" id="relighting-videos">
+    <div class="container" style="max-width: 920px;">
+      <h2 class="title is-3 has-text-centered mb-2" style="font-family: 'Outfit', sans-serif;">Relighting Results under Unseen HDRIs</h2>
+      <hr style="height: 1.5px; background-color: rgba(15, 23, 42, 0.1); border: none; margin: 0.5rem 0 1.5rem 0;">
+
+      <!-- Minimalist Controls Panel -->
+      <div class="is-flex is-justify-content-space-between is-align-items-center mb-5" style="border-bottom: 1px solid var(--border-color); padding-bottom: 0.75rem;">
+        <!-- Left: Scene Toggle -->
+        <div class="toggle-buttons">
+          <button class="toggle-btn active" data-video-scene="lego">Lego</button>
+          <button class="toggle-btn" data-video-scene="hotdog">Hotdog</button>
+        </div>
+        <!-- Right: Playback Toggle -->
+        <button class="toggle-btn" id="relight-play-pause-btn" style="min-width: 100px;">
+          <span class="icon mr-1"><i class="fa-solid fa-pause"></i></span>
+          <span class="btn-text">Pause</span>
+        </button>
+      </div>
+
+      <!-- Row 1: Fireplace -->
+      <h4 class="title is-5 mb-3" style="font-family: 'Outfit', sans-serif; text-align: left;">Relighting Environment #1: Fireplace</h4>
+      <div class="columns is-mobile is-vcentered mb-6">
+        <!-- Target Light Env Map -->
+        <div class="column is-2">
+          <div style="border-radius: 8px; border: 1px solid var(--border-color); overflow: hidden;">
+            <img src="static/images/fireplace.png" style="width: 100%; display: block;" alt="Fireplace Env Map">
+          </div>
+          <p class="has-text-centered is-size-7 has-text-grey mt-2">Target Light</p>
+        </div>
+        <!-- Baseline -->
+        <div class="column">
+          <div class="video-wrapper">
+            <div class="video-loader"></div>
+            <video class="video-grid-el" data-model="baseline" data-env="fireplace" autoplay loop muted playsinline style="width: 100%; display: block;">
+              <source src="static/videos/lego_baseline_fireplace.mp4" type="video/mp4">
+            </video>
+          </div>
+          <p class="has-text-centered is-size-7 has-text-grey mt-2">Baseline (GIR)</p>
+        </div>
+        <!-- Diffusion Priors -->
+        <div class="column">
+          <div class="video-wrapper">
+            <div class="video-loader"></div>
+            <video class="video-grid-el" data-model="diff_prior" data-env="fireplace" autoplay loop muted playsinline style="width: 100%; display: block;">
+              <source src="static/videos/lego_diff_prior_fireplace.mp4" type="video/mp4">
+            </video>
+          </div>
+          <p class="has-text-centered is-size-7 has-text-grey mt-2">Ours (Diffusion)</p>
+        </div>
+        <!-- GT Priors -->
+        <div class="column">
+          <div class="video-wrapper">
+            <div class="video-loader"></div>
+            <video class="video-grid-el" data-model="gt_prior" data-env="fireplace" autoplay loop muted playsinline style="width: 100%; display: block;">
+              <source src="static/videos/lego_gt_prior_fireplace.mp4" type="video/mp4">
+            </video>
+          </div>
+          <p class="has-text-centered is-size-7 has-text-grey mt-2">Ours (GT Priors)</p>
+        </div>
+        <!-- Ground Truth -->
+        <div class="column">
+          <div class="video-wrapper">
+            <div class="video-loader"></div>
+            <video class="video-grid-el" data-model="gt" data-env="fireplace" autoplay loop muted playsinline style="width: 100%; display: block;">
+              <source src="static/videos/lego_gt_fireplace.mp4" type="video/mp4">
+            </video>
+          </div>
+          <p class="has-text-centered is-size-7 has-text-grey mt-2">Ground Truth</p>
+        </div>
+      </div>
+
+      <!-- Row 2: Night -->
+      <h4 class="title is-5 mb-3" style="font-family: 'Outfit', sans-serif; text-align: left;">Relighting Environment #2: Night</h4>
+      <div class="columns is-mobile is-vcentered mb-6">
+        <!-- Target Light Env Map -->
+        <div class="column is-2">
+          <div style="border-radius: 8px; border: 1px solid var(--border-color); overflow: hidden;">
+            <img src="static/images/night.png" style="width: 100%; display: block;" alt="Night Env Map">
+          </div>
+          <p class="has-text-centered is-size-7 has-text-grey mt-2">Target Light</p>
+        </div>
+        <!-- Baseline -->
+        <div class="column">
+          <div class="video-wrapper">
+            <div class="video-loader"></div>
+            <video class="video-grid-el" data-model="baseline" data-env="night" autoplay loop muted playsinline style="width: 100%; display: block;">
+              <source src="static/videos/lego_baseline_night.mp4" type="video/mp4">
+            </video>
+          </div>
+          <p class="has-text-centered is-size-7 has-text-grey mt-2">Baseline (GIR)</p>
+        </div>
+        <!-- Diffusion Priors -->
+        <div class="column">
+          <div class="video-wrapper">
+            <div class="video-loader"></div>
+            <video class="video-grid-el" data-model="diff_prior" data-env="night" autoplay loop muted playsinline style="width: 100%; display: block;">
+              <source src="static/videos/lego_diff_prior_night.mp4" type="video/mp4">
+            </video>
+          </div>
+          <p class="has-text-centered is-size-7 has-text-grey mt-2">Ours (Diffusion)</p>
+        </div>
+        <!-- GT Priors -->
+        <div class="column">
+          <div class="video-wrapper">
+            <div class="video-loader"></div>
+            <video class="video-grid-el" data-model="gt_prior" data-env="night" autoplay loop muted playsinline style="width: 100%; display: block;">
+              <source src="static/videos/lego_gt_prior_night.mp4" type="video/mp4">
+            </video>
+          </div>
+          <p class="has-text-centered is-size-7 has-text-grey mt-2">Ours (GT Priors)</p>
+        </div>
+        <!-- Ground Truth -->
+        <div class="column">
+          <div class="video-wrapper">
+            <div class="video-loader"></div>
+            <video class="video-grid-el" data-model="gt" data-env="night" autoplay loop muted playsinline style="width: 100%; display: block;">
+              <source src="static/videos/lego_gt_night.mp4" type="video/mp4">
+            </video>
+          </div>
+          <p class="has-text-centered is-size-7 has-text-grey mt-2">Ground Truth</p>
+        </div>
+      </div>
+
+      <!-- Row 3: Snowy Forest -->
+      <h4 class="title is-5 mb-3" style="font-family: 'Outfit', sans-serif; text-align: left;">Relighting Environment #3: Snowy Forest</h4>
+      <div class="columns is-mobile is-vcentered mb-6">
+        <!-- Target Light Env Map -->
+        <div class="column is-2">
+          <div style="border-radius: 8px; border: 1px solid var(--border-color); overflow: hidden;">
+            <img src="static/images/snow.png" style="width: 100%; display: block;" alt="Snow Env Map">
+          </div>
+          <p class="has-text-centered is-size-7 has-text-grey mt-2">Target Light</p>
+        </div>
+        <!-- Baseline -->
+        <div class="column">
+          <div class="video-wrapper">
+            <div class="video-loader"></div>
+            <video class="video-grid-el" data-model="baseline" data-env="snow" autoplay loop muted playsinline style="width: 100%; display: block;">
+              <source src="static/videos/lego_baseline_snow.mp4" type="video/mp4">
+            </video>
+          </div>
+          <p class="has-text-centered is-size-7 has-text-grey mt-2">Baseline (GIR)</p>
+        </div>
+        <!-- Diffusion Priors -->
+        <div class="column">
+          <div class="video-wrapper">
+            <div class="video-loader"></div>
+            <video class="video-grid-el" data-model="diff_prior" data-env="snow" autoplay loop muted playsinline style="width: 100%; display: block;">
+              <source src="static/videos/lego_diff_prior_snow.mp4" type="video/mp4">
+            </video>
+          </div>
+          <p class="has-text-centered is-size-7 has-text-grey mt-2">Ours (Diffusion)</p>
+        </div>
+        <!-- GT Priors -->
+        <div class="column">
+          <div class="video-wrapper">
+            <div class="video-loader"></div>
+            <video class="video-grid-el" data-model="gt_prior" data-env="snow" autoplay loop muted playsinline style="width: 100%; display: block;">
+              <source src="static/videos/lego_gt_prior_snow.mp4" type="video/mp4">
+            </video>
+          </div>
+          <p class="has-text-centered is-size-7 has-text-grey mt-2">Ours (GT Priors)</p>
+        </div>
+        <!-- Ground Truth -->
+        <div class="column">
+          <div class="video-wrapper">
+            <div class="video-loader"></div>
+            <video class="video-grid-el" data-model="gt" data-env="snow" autoplay loop muted playsinline style="width: 100%; display: block;">
+              <source src="static/videos/lego_gt_snow.mp4" type="video/mp4">
+            </video>
+          </div>
+          <p class="has-text-centered is-size-7 has-text-grey mt-2">Ground Truth</p>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+
+
+  <!-- QUANTITATIVE RESULTS -->
+  <section class="section" id="evaluation">
+    <div class="container is-max-desktop">
+      <h2 class="title is-3 has-text-centered mb-2" style="font-family: 'Outfit', sans-serif;">Quantitative Results</h2>
+      <hr style="height: 1.5px; background-color: rgba(15, 23, 42, 0.1); border: none; margin: 0.5rem 0 1.5rem 0;">
+
+      <div class="table-container">
+        <table class="latex-table">
+          <thead>
+            <tr>
+              <th rowspan="2">Method</th>
+              <th colspan="3">Mean Albedo</th>
+              <th colspan="1" class="latex-group-start">Mean Normal</th>
+              <th colspan="3" class="latex-group-start">Mean Relighting</th>
+            </tr>
+            <tr>
+              <th>PSNR &uarr;</th>
+              <th>SSIM &uarr;</th>
+              <th>LPIPS &darr;</th>
+              <th class="latex-group-start">MAE &darr;</th>
+              <th class="latex-group-start">PSNR &uarr;</th>
+              <th>SSIM &uarr;</th>
+              <th>LPIPS &darr;</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>GIR</td>
+              <td>25.80</td>
+              <td>0.91</td>
+              <td>0.10</td>
+              <td class="latex-group-start">6.88</td>
+              <td class="latex-group-start">26.221</td>
+              <td>0.892</td>
+              <td>0.081</td>
+            </tr>
+            <tr>
+              <td>Ours (Diffusion priors)</td>
+              <td>30.02</td>
+              <td>0.95</td>
+              <td>0.04</td>
+              <td class="latex-group-start">4.63</td>
+              <td class="latex-group-start"><strong>27.718</strong></td>
+              <td><strong>0.913</strong></td>
+              <td><strong>0.075</strong></td>
+            </tr>
+            <tr>
+              <td>Ours (GT priors)</td>
+              <td><strong>36.92</strong></td>
+              <td><strong>0.97</strong></td>
+              <td><strong>0.02</strong></td>
+              <td class="latex-group-start"><strong>1.89</strong></td>
+              <td class="latex-group-start">27.277</td>
+              <td>0.912</td>
+              <td><strong>0.075</strong></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      
+      <div class="content mt-4">
+        <p class="is-size-7 has-text-grey has-text-centered">
+          All models are evaluated on novel views at 400x400 (-r 2 resolution) after 60,000 iterations. Metrics represent the average performance across the synthetic scenes (Lego and Hotdog). Relighting models utilize the LLI parameterization.
+        </p>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- FOOTER -->
+  <footer class="footer">
+    <div class="content has-text-centered">
+      <p>
+        <strong>3D Gaussian Inverse Rendering with Diffusion Priors</strong> project website. Built by Thomas Putzer and Lukas Jochim.
+      </p>
+      <p class="is-size-7 has-text-grey">
+        This work builds on <a href="https://3dgir.github.io/" target="_blank">GIR</a> and leverages priors from <a href="https://research.nvidia.com/labs/toronto-ai/DiffusionRenderer/" target="_blank">DiffusionRenderer</a>.
+      </p>
+      <p class="is-size-7 has-text-grey mt-2">
+        Website layout adapted from the <a href="https://github.com/nerfies/nerfies.github.io" target="_blank">Nerfies template</a>.
+      </p>
+    </div>
+  </footer>
+
+  <!-- Scripts -->
+  <script src="static/js/index.js"></script>
+</body>
+</html>

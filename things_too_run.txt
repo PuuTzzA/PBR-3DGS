@@ -1,0 +1,14 @@
+What to do (one at a time, in this order)
+
+cd GIR
+# 1) finish the headline 45k -> 60k  (~7 h)
+python run_experiments.py --only lego_gt_zncc_grad_anchor_lli2 --resume-iter 45000
+# 2) finish the diffusion arm 45k -> 60k  (~6 h)
+python run_experiments.py --only lego_diff_zncc_grad_lli2 --resume-iter 45000
+# 3) the new anchor-0.15 variant (buffer HIT, Phase 3 only, ~15 h)
+python run_experiments.py --only lego_gt_zncc_grad_anchor15_lli2
+Each invocation regenerates the comparison PDF/CSV over the whole batch, so after step 3 you'll have exactly your three deliverables side by side: 
+baseline (done), GT priors (headline @60k + anchor15), and diffusion priors @60k.
+
+One thing to watch: in the two runs that reached 60k, the envmap ratio worsened over the 45k→60k tail (baseline 1.29→1.51, envpen 1.66→2.0). 
+If the headline's gain drifts away from 1.0 by 60k, that's a real finding about the phase-3 tail — and chkpnt45000 stays on disk, so nothing is lost.
