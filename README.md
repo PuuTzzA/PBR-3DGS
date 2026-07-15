@@ -43,6 +43,44 @@ For the detailed environment installation and troubleshooting guide (compiling c
 
 ---
 
+## Dataset Structure
+
+The pipeline expects your datasets (including extracted priors) to follow a specific layout depending on their format (COLMAP real-world style vs. Blender/Synthetic style):
+
+```text
+<dataset_name>/
+├── <Real_World_Dataset>/ (e.g., bicycle, garden)
+│   ├── rgba/                   # Input images (or processed RGBA)
+│   ├── albedo/                 # Estimated albedo maps
+│   ├── albedo_video/           # Time-consistent video albedo maps
+│   ├── depth/                  # Estimated depth maps
+│   ├── normal/                 # Estimated surface normals
+│   ├── metallic/               # Estimated metallic maps
+│   ├── roughness/              # Estimated roughness maps
+│   └── sparse/                 # COLMAP sparse camera poses (cameras/images/points)
+│
+└── <Synthetic_Dataset>/ (e.g., armadillo, lego)
+    ├── hdris/                  # High-resolution HDRI environment maps (.hdr) for relighting
+    ├── train/
+    │   ├── rgba/               # Input images under base training lighting
+    │   ├── rgba_<hdri_name>/   # GT relighted images for a specific HDRI (e.g., rgba_fireplace)
+    │   ├── albedo/             # Estimated albedo prior
+    │   ├── albedo_gt/          # Ground truth albedo
+    │   ├── normal/             # Estimated normal prior
+    │   ├── normal_gt/          # Ground truth normal
+    │   └── ... (metallic, roughness, and depth priors)
+    ├── val/                    # Similar structure to train
+    ├── test/                   # Similar structure to train
+    ├── transforms_train.json   # Camera poses for training
+    ├── transforms_val.json     # Camera poses for validation
+    └── transforms_test.json    # Camera poses for testing
+```
+
+*   **`hdris/`**: Stored `.hdr` files (e.g., `fireplace.hdr`, `night.hdr`, `snow.hdr`) containing high-resolution panoramic environment maps used during evaluation to relight the PBR-decomposed scene.
+*   **`rgba_<hdri_name>/`**: Directories containing ground-truth reference images of the scene rendered under the corresponding HDRI (e.g., `rgba_fireplace/` corresponds to `fireplace.hdr`). The evaluation scripts load these folders to compute PSNR, SSIM, and LPIPS metrics under novel illumination.
+
+---
+
 ## Running the Code
 
 ### 1. Training & Experiments
