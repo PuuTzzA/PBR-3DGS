@@ -1,14 +1,11 @@
 # Prior-Guided Gaussian Inverse Rendering — Change Reference & Method
 
-*Status: 2026-07-14 (try_10 / final runs). Companion document to
-[FINDINGS.md](FINDINGS.md), which records the experimental history and the
-evidence behind every choice below. This document records **what** we changed
-relative to baseline GIR, **why**, and **how it works** — precisely enough to
-be cited later — followed by a paper-style method section (Part II).*
+*This document records **what** we changed relative to baseline GIR,
+**why**, and **how it works** — precisely enough to be cited later.*
 
 ---
 
-# Part I — Complete inventory of changes vs. baseline GIR
+# Complete inventory of changes vs. baseline GIR
 
 ## 0. What "baseline" means
 
@@ -111,8 +108,7 @@ gradient flow, same densification/reset/optimizer logic. The added prior
 losses are still *computed* for logging under `--exclude_prior_loss`
 ([train.py:760-775](GIR/train.py#L760-L775)) — that is how the baseline's
 albedo/normal error curves appear in the comparison reports — but they
-never enter the objective. The full per-file delta inventory is in
-FINDINGS.md §2.5.
+never enter the objective.
 
 ### 0.4 Intentional deviations (applied to ALL runs equally)
 
@@ -210,11 +206,8 @@ image ($a' = s \cdot a$, $E' = E / s$ renders identically). A *direct*
 (absolute) albedo loss resolves the scale but transfers every local error of
 the prior — including per-view exposure/white-balance jitter and baked
 shading of diffusion priors — straight into the material, and (because the
-priors are rasterized) into geometry. We therefore split the supervision:
-**structure through an invariant loss** (this section) and **global scale
-through a weak separate anchor** (§2.2). Modes implemented in
-`albedo_prior_loss` ([loss_utils.py:178-418](GIR/utils/loss_utils.py#L178));
-the two used in final configs, with $A$ the rasterized albedo, $\tilde A$
+priors are rasterized) into geometry. We therefore supervise structure
+through an invariant loss, with $A$ the rasterized albedo, $\tilde A$
 the per-view prior image, and $M$ the foreground mask:
 
 * **`zncc`** (scale-and-shift-invariant / Pearson). Standardize both images
@@ -237,8 +230,10 @@ the per-view prior image, and $M$ the foreground mask:
   images per channel and direction
   ([loss_utils.py:338-362](GIR/utils/loss_utils.py#L338-L362)):
 
-  $$\mathcal{L}_{zncc\text{-}grad} = \sum_{d \in \{x,y\}} \frac{1}{3}\sum_{c}
-  \Big(1 - \mathrm{corr}_{M_d}\big(\partial_d A_c,\; \partial_d \tilde A_c\big)\Big).$$
+**What we also tried:**
+* **`zncc_grad`** (gradient-domain ZNCC): Finite-differences both images first before ZNCC to remove smooth spatial fields (like baked illumination). While highly invariant, it permitted larger per-channel offsets that drifted without a strong absolute anchor.
+* Other implemented modes (e.g. `lstsq`, `log_chroma`, `gradient`, `zncc_local`, `ssim_struct`, `si_ema`) are documented inline in `albedo_prior_loss` but are inactive.
+* **Note on Warm-up Mode:** During the Phase 1/2 geometry warm-up, the absolute target is required (as no environment light is yet modeled), so we use a **`direct`** loss mode (`(1−λ_dssim)·Huber + λ_dssim·(1−SSIM)` on raw values).
 
   Differentiating first removes *any smooth field*, not just a global one:
   low-frequency baked shading, soft shadows and brightness ramps in the
@@ -271,6 +266,7 @@ is wanted, since there is no envmap yet to be ambiguous against.)
 A weak **absolute** term added on top of the invariant mode
 ([train.py:791-798](GIR/train.py#L791-L798)):
 
+We experimented with adding a weak **absolute** term on top of the invariant mode to pin the scale and prevent drift:
 ```
 loss_prior += albedo_anchor_weight · Huber(A_render, A_gt, δ=0.2, mask)
 ```
@@ -330,15 +326,12 @@ settle before the priors pull on it; the hold (vs the earlier decay-to-0.5)
 keeps the priors constraining the late phase, where the model otherwise
 re-bakes the training light (verified in try_5/6).
 
-### 2.6 Prior→geometry gradient scale — `--prior_geom_grad_scale` (available, off)
+### 2.6 Experimental features not in the final configs
 
-A gradient hook that scales (0 = blocks) the geometry gradients
-(means/scales/rotations/opacity) flowing through the **albedo/material prior
-rasters only**, leaving photometric and normal-prior geometry gradients
-untouched (`gaussian_renderer/__init__.py`). Built for the try_5 failure
-mode (per-view-inconsistent diffusion albedo restructuring geometry through
-the raster). Default 1.0 = identity; **not** in the final configs — the
-geometry LR anneal (§4.1) plus `zncc` proved sufficient.
+We implemented several mechanisms during exploration that are disabled (set to 0.0/off/inert) in the final configuration:
+* **Prior-to-geometry gradient scaling (`--prior_geom_grad_scale 1.0`)**: Intended to scale or block geometry gradients flowing through the prior rasters to prevent multi-view inconsistencies from warping geometry. Kept at default 1.0 (inert) as ZNCC and geometry LR annealing were sufficient.
+* **Envmap mean penalty (`--reg_env_mean_weight 0.0`)**: Intended to force energy out of the training envmap into the LLI bounce term by penalizing envmap mean radiance. Retired as it degraded envmap structure and lowered relight performance.
+* **Disable Stage-3 Opacity Reset (`--disable_reset_third_stage`)**: An option to skip opacity resets during Phase 3, left off (resets run normally every 3k iterations).
 
 ## 3. Regularizer changes
 
@@ -384,31 +377,7 @@ colour ambiguity — remove it and the baseline's decomposition can tint-swap
 arbitrarily. That is why the paper's launch line carries `0.1` and why our
 baseline run keeps it (paper-exactness).
 
-**Why prior runs lower it to 0.001 (~off).** Our GT albedo prior (plus
-anchor) pins the albedo's colour *directly from data*, which resolves the
-colour ambiguity from the material side — the white-light heuristic becomes
-redundant. Worse, it becomes actively wrong: our training light is a
-**sunset** (strongly tinted), so any meaningful desaturation pressure pushes
-the true orange tint out of the envmap and into the materials as an
-inverse-blue cast. Measured: at 0.01 the learned envmap is essentially
-black-and-white; at 0.001 it keeps the sunset tint. We keep 0.001 rather
-than 0 as a mild numerical stabilizer. Note the honest caveat from try_7:
-the *relight metrics* were insensitive to 0.001 vs 0.01 (< 0.15 dB
-everywhere — at relight the training envmap is swapped out anyway, and the
-albedo tint error partially cancels); the setting matters for the
-**decomposition quality** (envmap fidelity, albedo colour), which is a
-deliverable in its own right.
-
-### 3.3 `--reg_env_mean_weight` (added for try_10, tried at 0.005, RETIRED)
-
-A scheduler-scaled penalty on the learned envmap's mean radiance
-([train.py:737-750](GIR/train.py#L737-L750)), intended to push the
-transport-deficit energy out of the (non-transferable) training envmap into
-the light-linear bounce (§5). try_10 falsified the mechanism: with the
-penalty active the envmap mean ratio *rose* (1.49 → 2.00) while envmap
-structure degraded (logPSNR 26.7 vs 28.9 without it), and raw relight ended
-below the penalty-free headline. Default 0.0 = inert; not in any final
-config. Kept in the code as a documented negative result.
+**Why prior runs lower it to 0.001 (~off).** Our GT albedo prior pins the albedo's colour *directly from data*, which resolves the colour ambiguity from the material side — the white-light heuristic becomes redundant. Worse, it becomes actively wrong: our training light is a **sunset** (strongly tinted), so any meaningful desaturation pressure pushes the true orange tint out of the envmap and into the materials as an inverse-blue cast. Measured: at 0.01 the learned envmap is essentially black-and-white; at 0.001 it keeps the sunset tint. We keep 0.001 rather than 0 as a mild numerical stabilizer. Note the caveat from try_7: the *relight metrics* were insensitive to 0.001 vs 0.01 (< 0.15 dB everywhere — at relight the training envmap is swapped out anyway, and the albedo tint error partially cancels); the setting matters for the **decomposition quality** (envmap fidelity, albedo colour), which is a deliverable in its own right.
 
 ## 4. Optimizer / geometry changes
 
@@ -428,9 +397,6 @@ config. Kept in the code as a documented negative result.
 * **`--max_gaussians 1_500_000`**: hard cap enforced during densification
   only (it never prunes; inert after `densify_until_iter`). Batch-wide,
   baseline included (§0).
-* **`--disable_reset_third_stage`** (available, off in all final configs):
-  skips opacity resets after Phase 3 starts; built for a reset A/B in
-  earlier batches.
 
 ## 5. Renderer change: light-linear indirect illumination (LLI)
 
@@ -622,14 +588,14 @@ resumes preserve metric history up to and including the resumed iteration.
 
 ## 10. Final run configurations (try_10 batch, r2 / 60 k)
 
-| parameter | baseline_no_prior | gt_zncc_anchor0_lli2 | diff_zncc_lli2 |
+| parameter | baseline_no_prior | gt_zncc_zncc_neu | diff_zncc_zncc |
 |---|---|---|---|
 | prior source | — (logged only) | GT (world-space) | DiffusionRenderer |
 | `albedo_prior_mode` | — | zncc | zncc |
 | `warmup_albedo_prior_mode` | — | direct | direct |
 | `albedo_geometry_warmup` | off | on | on |
 | `lambda_albedo_gt` | 0 | 0.25 | 0.25 |
-| `albedo_anchor_weight` | 0 | **0.0** | 0 |
+| `albedo_anchor_weight` | 0 | 0 | 0 |
 | `lambda_normal_gt` | 0 | 0.8 | 0.4 |
 | `lambda_metallic_gt` | 0 | 0.15 (vs zeros) | 0.05 (metallic_video) |
 | `lambda_roughness_gt` | 0 | — (no GT) | 0.05 (roughness_video) |
@@ -644,154 +610,3 @@ resumes preserve metric history up to and including the resumed iteration.
 | shared | `-r 2`, 60 k iters, stages 5 k/30 k, densify 500→45 k @100, reset 3 k, `lambda_dssim 0.4`, cap 1.5 M, `--eval --random_background --hdr_rotation`, relight 24 views | | |
 
 ---
-
-# Part II — Method (paper style)
-
-## Prior-Guided Gaussian Inverse Rendering with Light-Linear Indirect Illumination
-
-**Overview.** We build on GIR [2], which represents a scene as a set of 3D
-Gaussians [1] with per-gaussian PBR attributes (albedo $a$, metallic $m$,
-roughness $r$), a learned environment map $E$, per-gaussian binary
-visibility, and a baked spherical-harmonics (SH) indirect-radiance field,
-optimized end-to-end against posed images by differentiable rasterization.
-Inverse rendering under a single unknown illumination is ill-posed — most
-prominently through the *albedo–lighting ambiguity*, where per-channel gain
-moves freely between albedo and light. We resolve it with dense per-view
-material priors (ground-truth buffers on synthetic data; DiffusionRenderer
-[6] estimates on real data), injected through *scale-invariant* losses with
-a weak absolute anchor, on a curriculum that fixes geometry before
-materials. We additionally identify a systematic energy deficit in GIR's
-frozen indirect terms that breaks relighting, and repair it with a
-*light-linear* reparameterization.
-
-**Rendering model (preliminaries).** Following GIR, each gaussian is shaded
-with a split-sum specular term [4,5]: $F_0 = 0.04(1-m) + m\,a$,
-$\rho_s = F_0 A + B$ with $(A,B)$ from the pre-integrated BRDF LUT at
-$(n\!\cdot\!v, r)$, and specular light mixed from a prefiltered environment
-query and a per-gaussian baked SH radiance $I_{SH}$ gated by the reflection
-visibility $o$. The diffuse term averages the environment over $N$
-hemisphere directions $\omega_j$ with baked binary occlusion
-$o_j\in\{0,1\}$:
-
-$$L_d = \tfrac{1}{N}\textstyle\sum_j (1-o_j)\,E(\omega_j),\qquad
-L_s = o\, I_{SH}(\hat r) + (1-o)\,E_r(\hat r; r).$$
-
-**Three-phase curriculum.** Phase 1 (iter ≤ 5 k) fits geometry: with
-*albedo geometry warm-up*, the rasterized flat albedo is fitted directly to
-the albedo prior (robust Huber + DSSIM), replacing the photometric loss —
-densification thus places gaussians against a shading-free target. Phase 2
-(≤ 30 k) rasterizes the covariance-derived shading normal differentiably
-each step and supervises it with the prior, $\mathcal{L}_n =
-\langle 1 - \cos(n, \tilde n)\rangle_M$ (foreground mask $M$; camera-space
-prior normals are rotated to world space), locking surface orientation
-before any material exists. Phase 3 (> 30 k) optimizes the full
-decomposition with all priors under a weight schedule $s(t)$ that ramps
-linearly to 1 over the first 15 % of the phase and then holds — decaying
-priors allowed late-phase light re-baking.
-
-**Scale-invariant albedo supervision.** Absolute albedo losses import the
-prior's per-view exposure and baked-shading errors into the material. We
-instead supervise structure invariantly, in the spirit of scale-invariant
-depth losses [7]. With $\hat x = (x-\mu_M(x))/\sigma_M(x)$ denoting
-per-channel standardization over $M$:
-
-$$\mathcal{L}_{zncc} = \mathrm{Huber}_\delta\!\big(\hat A, \hat{\tilde A}\big)_M,$$
-
-which is invariant to any per-channel affine transform (gain + bias) of 
-either input. While we also implemented a gradient-domain variant 
-($\mathcal{L}_{zncc\text{-}grad}$) to handle smooth shading fields in 
-the prior, plain $\mathcal{L}_{zncc}$ proved superior at paper scale 
-when combined with the albedo anchor. A weak absolute **anchor**
-$w_a\,\mathrm{Huber}_\delta(A,\tilde A)_M$ with $w_a < \lambda_{alb}$
-(0.0 in the final configuration vs 0.25; we found that without it we 
-get better results) re-pins the global scale without transferring 
-local prior errors. Normal, metallic and roughness priors use masked robust losses;
-on dielectric synthetic scenes the metallic prior (against zero) closes a
-degenerate rough-metallic energy channel the optimizer otherwise exploits.
-Prior gradients into geometry are throttled in Phase 3 by cosine-annealing
-the geometry learning rates to 5 %.
-
-**Light-linear indirect illumination (LLI).** GIR's occluded diffuse
-directions receive zero light and its SH indirect radiance is frozen at
-training-light levels, so the renderer transports systematically less
-energy than path-traced references; the learned envmap absorbs the deficit
-during training, and relit renders are uniformly too dark. We
-reparameterize both baked terms as *reflectance × mean radiance*
-$\mu_E = \mathrm{mean}(E)$ of the **currently loaded** environment
-(gradient-detached):
-
-$$L_d = \tfrac{1}{N}\textstyle\sum_j \big[(1-o_j)\,E(\omega_j) + o_j\, b\big],\quad
-b = I_{SH}(n)\,\mu_E,\qquad
-L_s = o\, I_{SH}(\hat r)\,\mu_E + (1-o)\,E_r(\hat r; r).$$
-
-where $I_{SH}(\omega) = (\text{SH}(f, \omega) + 0.5)^+$. By scaling the 
-baked terms by the current environment's mean radiance $\mu_E$, we 
-transform them from absolute radiance into relative reflectances that 
-dynamically respond to lighting changes.
-
-Each gaussian stores its baked radiance field as 48-dimensional SH 
-features (degree 3). We derive two separate values from this single SH 
-field to handle occlusions by evaluating the same spherical harmonic 
-function at different directions: **one for indirect reflections** 
-(specular indirect light, evaluated at the reflection direction $\hat{r}$) 
-and **one for occluded direct reflections** (diffuse bounce 
-reflectance $b$, evaluated at the shading normal $n$). The name **LLI** 
-(Light-Linear Indirect) refers to the reparameterization of baked 
-radiance as a reflectance that scales linearly with the current 
-environment's mean radiance $\mu_E$. Sharp reflections (mirrors) are 
-preserved as they are handled by the *direct* specular term, which 
-samples the high-resolution environment map directly and is not 
-scaled by $\mu_E$. 
-The detach is essential: allowing gradients into $\mu_E$
-lets the optimizer inflate the mean via isolated bright texels, corrupting
-both the envmap and the bounce calibration. LLI adds no parameters (the
-existing SH features double as bounce reflectance).
-
-**Objective.** With photometric loss $\mathcal{L}_{pho} =
-0.6\,L_1 + 0.4\,(1-\mathrm{SSIM})$ and the (prior-reduced) TV/smoothness
-regularizers $\mathcal{L}_{reg}$ of [2], Phase 3 minimizes
-
-$$\mathcal{L} = \mathcal{L}_{pho} + \mathcal{L}_{reg}
-+ s(t)\big[\lambda_{alb}\mathcal{L}_{alb} + w_a\mathcal{L}_{anchor}
-+ \lambda_n\mathcal{L}_n + \lambda_m\mathcal{L}_m + \lambda_r\mathcal{L}_r\big].$$
-
-**Evaluation protocol.** Besides raw PSNR under novel light, we report
-scale-*aligned* PSNR (after a fitted global gain $g^\ast = \langle I,
-\tilde I\rangle / \langle I, I\rangle$) and $g^\ast$ itself: raw couples
-structure with energy calibration, aligned isolates structure, and the gain
-isolates calibration ($g^\ast{>}1$: too dark). A decomposition is only
-considered resolved when $g^\ast \to 1$ at aligned-level raw PSNR — a
-criterion that unmasks configurations whose material errors accidentally
-cancel their transport errors.
-
-### References
-
-[1] B. Kerbl, G. Kopanas, T. Leimkühler, G. Drettakis. *3D Gaussian
-Splatting for Real-Time Radiance Field Rendering.* ACM TOG (SIGGRAPH) 2023.
-
-[2] Y. Shi, Y. Wu, C. Wu, X. Liu, C. Zhao, H. Feng, J. Liu, L. Zhang,
-J. Zhang, B. Zhou, E. Ding, J. Wang. *GIR: 3D Gaussian Inverse Rendering
-for Relightable Scene Factorization.* arXiv:2312.05133, 2023.
-
-[3] H. Jin, I. Liu, P. Xu, X. Zhang, S. Han, S. Bi, X. Zhou, Z. Xu, H. Su.
-*TensoIR: Tensorial Inverse Rendering.* CVPR 2023. (Dataset protocol /
-relighting benchmark style.)
-
-[4] B. Karis. *Real Shading in Unreal Engine 4.* SIGGRAPH Courses, 2013.
-(Split-sum approximation.)
-
-[5] J. Munkberg, J. Hasselgren, T. Shen, J. Gao, W. Chen, A. Evans,
-T. Müller, S. Fidler. *Extracting Triangular 3D Models, Materials, and
-Lighting From Images.* CVPR 2022. (Split-sum in inverse rendering.)
-
-[6] R. Liang et al. *DiffusionRenderer: Neural Inverse and Forward
-Rendering with Video Diffusion Models.* NVIDIA, CVPR 2025. (Source of the
-estimated albedo/normal/metallic/roughness priors.)
-
-[7] R. Ranftl, K. Lasinger, D. Hafner, K. Schindler, V. Koltun. *Towards
-Robust Monocular Depth Estimation: Mixing Datasets for Zero-Shot Cross-
-Dataset Transfer.* IEEE TPAMI 2020. (Scale-/shift-invariant and
-gradient-matching losses.)
-
-[8] P. J. Huber. *Robust Estimation of a Location Parameter.* Annals of
-Mathematical Statistics, 1964.
