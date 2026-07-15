@@ -41,8 +41,8 @@ jobs:
         with:
           # If your index.html is in the root directory, leave this as "."
           # If it is in a folder (like "dist" or "public"), change it to that folder name
-          path: '.'
-
+           path: 'docs'
+           
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
