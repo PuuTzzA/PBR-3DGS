@@ -4,7 +4,7 @@ This repository contains the official implementation of **3D Gaussian Inverse Re
 
 [![Project Page](https://img.shields.io/badge/Project-Website-blue?style=flat-square)](https://PuuTzzA.github.io/PBR-3DGS/)
 [![Paper](https://img.shields.io/badge/Paper-PDF-red?style=flat-square)](https://PuuTzzA.github.io/PBR-3DGS/static/paper.pdf)
-[![Poster](https://img.shields.io/badge/Poster-PDF-orange?style=flat-square)](https://drive.google.com/file/d/1zN8qeiQoYxnl3pO4zo5Exqn2gCYzfl4z/view?usp=drive_link)
+[![Poster](https://img.shields.io/badge/Poster-PDF-orange?style=flat-square)](docs/static/poster/ADL4CV-Poster.pdf)
 
 ---
 
