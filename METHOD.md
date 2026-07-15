@@ -1,6 +1,6 @@
 # Prior-Guided Gaussian Inverse Rendering — Change Reference & Method
 
-*Status: 2026-07-07 (try_10 / repair batch). Companion document to
+*Status: 2026-07-14 (try_10 / final runs). Companion document to
 [FINDINGS.md](FINDINGS.md), which records the experimental history and the
 evidence behind every choice below. This document records **what** we changed
 relative to baseline GIR, **why**, and **how it works** — precisely enough to
@@ -181,7 +181,7 @@ curriculum by *what is supervised* in each:
 Because Phases 1–2 depend only on a small parameter subset, their stage-2
 checkpoint is cached in `outputs/warmup_buffer/` keyed by a config
 fingerprint, and any Phase-3-only variant resumes from it, skipping the
-first half of the schedule (30 k of 60 k iters; `run_experiments.py`, §8).
+first half of the schedule (30 k of 60 k iters; `run_experiments.py`, §9).
 
 ## 2. Prior losses (Phase 3)
 
@@ -194,7 +194,7 @@ The alpha intersection is critical for diffusion priors, whose background
 pixels contain hallucinated values. Rasterizing (instead of comparing
 per-gaussian attributes) means the priors see exactly what the camera sees —
 occlusion, blending and silhouettes included — at the price of prior
-gradients also flowing into geometry (see §2.8 and the geometry LR anneal,
+gradients also flowing into geometry (see §2.6 and the geometry LR anneal,
 §4.1, which manage that channel).
 
 All dense prior terms use the **Huber** loss (`huber_loss`,
@@ -230,8 +230,9 @@ the per-view prior image, and $M$ the foreground mask:
   input — exactly the global degrees of freedom the decomposition cannot
   determine and that a diffusion prior gets wrong per view (exposure /
   white balance). Anything beyond a global gain — spatially varying baked
-  shading in the prior, wrong texture — is still penalized.
-* **`zncc_grad`** (gradient-domain ZNCC). Finite-difference both images
+  shading in the prior, wrong texture — is still penalized. This is what the
+  headline config uses.
+ * **`zncc_grad`** (gradient-domain ZNCC). Finite-difference both images
   first, then maximize the masked Pearson correlation of the gradient
   images per channel and direction
   ([loss_utils.py:338-362](GIR/utils/loss_utils.py#L338-L362)):
@@ -244,20 +245,17 @@ the per-view prior image, and $M$ the foreground mask:
   prior all vanish from the target, and only the **placement and relative
   strength of texture edges** is supervised. The gradient masks $M_d$
   require both finite-difference neighbours to be foreground, so the
-  object–background silhouette step never counts as a GT edge. This is the
-  most invariant mode in the family and was the most robust against the
-  multi-view inconsistency of diffusion priors (try_5: on diffusion albedo,
-  zncc collapsed normals to 63° mean angular error while zncc_grad held
-  36° — the inconsistent low-frequency content was restructuring geometry
-  through the raster). It is the mode that must stay viable for the
-  diffusion-prior end-goal, and it is what the headline config uses.
+  object–background silhouette step never counts as a GT edge. This mode 
+  was used in earlier batches (try_5) to handle multi-view inconsistency 
+  of diffusion priors, but plain `zncc` proved superior in the final 
+  paper-scale runs.
 
 The invariance hierarchy matters: more invariance = more robustness to prior
 errors, but also more residual freedom the anchor has to close (§2.2) —
 `zncc` leaves one gain+bias per channel free; `zncc_grad` additionally
 leaves *any* smooth multiplicative field free. That trade-off is visible in
-the results: with the same 0.05 anchor, zncc pins the albedo scale
-(fitted gain ≈ 0.98) while zncc_grad drifts (0.815 at paper scale) until the
+the results: with the same 0.05 anchor, `zncc` pins the albedo scale
+(fitted gain ≈ 0.98) while `zncc_grad` drifts (0.815 at paper scale) until the
 anchor is raised to 0.15.
 
 (Other implemented modes — `direct`, `lstsq`, `log_chroma`, `gradient`,
@@ -268,7 +266,7 @@ is what the Phase-1/2 geometry warm-up uses via
 `--warmup_albedo_prior_mode direct` — during warm-up the *absolute* target
 is wanted, since there is no envmap yet to be ambiguous against.)
 
-### 2.2 Albedo anchor — `--albedo_anchor_weight` (0.05 headline / 0.15 repair)
+### 2.2 Albedo anchor — `--albedo_anchor_weight` (0.0)
 
 A weak **absolute** term added on top of the invariant mode
 ([train.py:791-798](GIR/train.py#L791-L798)):
@@ -280,17 +278,14 @@ loss_prior += albedo_anchor_weight · Huber(A_render, A_gt, δ=0.2, mask)
 Why: the invariant losses deliberately leave global per-channel scale free,
 and the optimizer *uses* that freedom — in try_6 the unanchored albedo
 drifted ~1.2× too bright and blue-tinted, with the envmap compensating (the
-inverse of the sunset training light). The anchor pins absolute scale while
-being ~5× weaker than the structural term (0.05 vs 0.25), so it cannot force
-per-view shading disagreements into the albedo. Verified: raw albedo PSNR
-22.0 → 27.3 (zncc_grad) / 31.2 (zncc) in try_7 at r4. zncc_grad's
-gradient-domain loss leaves larger per-channel offsets than zncc, and at
-paper scale (try_10) weight 0.05 proved too weak for it (albedo gain 0.815);
-the repair run `gt_zncc_grad_anchor15_lli2` raises it to **0.15** — the
-value try_9 showed fixes the drift (gain 0.87 → 0.93, +5 dB raw albedo) at
-zero relight cost. The diffusion arm uses **no anchor** (weight 0): the
-diffusion albedo's absolute scale is unreliable, and anchoring to it cost
-5 dB albedo PSNR in try_6.
+inverse of the sunset training light). However, we found that without it we 
+get better results: in the final paper-scale runs (try_10) using the `zncc` 
+mode, setting the anchor weight to **0** proved superior as `zncc` pins 
+the albedo scale sufficiently while avoiding the transfer of per-view 
+shading errors that an absolute term would force. Earlier `zncc_grad` 
+attempts required an anchor of 0.15 to hold the scale, but at the cost 
+of raw relight quality. The diffusion arm likewise uses **no anchor** 
+(weight 0).
 
 ### 2.3 Normal prior — `lambda_normal_gt 0.8` (GT) / 0.4 (diffusion)
 
@@ -343,7 +338,7 @@ rasters only**, leaving photometric and normal-prior geometry gradients
 untouched (`gaussian_renderer/__init__.py`). Built for the try_5 failure
 mode (per-view-inconsistent diffusion albedo restructuring geometry through
 the raster). Default 1.0 = identity; **not** in the final configs — the
-geometry LR anneal (§4.1) plus zncc_grad proved sufficient.
+geometry LR anneal (§4.1) plus `zncc` proved sufficient.
 
 ## 3. Regularizer changes
 
@@ -454,17 +449,46 @@ path-traced with full interreflection, so GIR systematically transports only
 training the learned envmap silently absorbs the deficit (trains too
 bright); at relight the GT HDRI arrives at native intensity and every render
 is uniformly too dark — the "relight gain" (fitted brightness ratio
-render→GT, §7) sat at 1.2–1.5 in every r4 GT run.
+render→GT, §8) sat at 1.2–1.5 in every r4 GT run.
 
 **Mechanism.** Reparameterize both baked terms as *reflectance ×
 mean radiance of the current envmap*:
 
 * `env_mean = envlight.base.detach().mean()` per channel (a 3-vector, read
-  from whatever envmap is currently loaded);
-* the specular SH indirect term becomes `I_SH(reflect_dir) · env_mean`;
+  from whatever environment is currently loaded);
+* the specular SH indirect term becomes $I_{SH}(\hat{r}) \cdot \mu_E$;
 * occluded diffuse directions receive a per-gaussian **bounce** term
-  `b = clamp(SH(features, n) + 0.5) · env_mean` instead of zero:
+  $b = (\text{SH}(f, n) + 0.5)^+ \cdot \mu_E$ instead of zero:
   `chunk_light = (1−occ)·E(ω) + occ·b`.
+
+**Why reflectance × mean radiance.** Standard GIR stores indirect radiance
+as an absolute value tied to the training illumination. When relighting
+under a novel environment map (e.g., a dark night or a bright sunny day),
+this frozen "glow" does not rescale, leading to systematically dark or
+blown-out interreflections. By reparameterizing the baked SH field as a
+reflectance (unitless) that scales with the environment's mean radiance
+$\mu_E$, we ensure the bounce energy adapts to the intensity of the
+swapped HDRI.
+
+**Notation and the $+0.5$ offset.** We use $I_{SH}(\omega)$ as a shorthand 
+for the indirect radiance field $(\text{SH}(f, \omega) + 0.5)^+$. The 
+$+0.5$ offset follows the standard Gaussian Splatting convention where 
+the SH basis functions represent deltas around a neutral 0.5 baseline (DC 
+component). This ensures that the learned reflectance remains in a stable 
+range and that the final radiance is non-negative.
+
+**SH Details & LLI.** Each gaussian stores its indirect/bounce field as 
+spherical harmonic (SH) features. For the active degree $D=3$, this 
+represents **48 dimensions** per gaussian (3 channels $\times$ 16 
+coefficients). We derive two separate values from this single SH field 
+to handle occlusions: **one for indirect reflections** (specular 
+indirect radiance $I_{SH}(\text{reflect\_dir}) \cdot env\_mean$) 
+and **one for occluded direct reflections** (diffuse bounce 
+term $b$, evaluated at the shading normal $n$). The step is called 
+**LLI (Light-Linear Indirect)** because it reparameterizes baked 
+radiance (which is frozen) as a reflectance factor that scales 
+**linearly** with the illumination ($env\_mean$) — ensuring 
+interreflections adapt when the environment light is swapped.
 
 During training this is a benign reparameterization — `env_mean` is just a
 scalar factor the SH coefficients absorb. At **relight** the envmap is
@@ -473,6 +497,56 @@ rescales linearly with the new light instead of staying frozen at
 training-light levels. No new parameters (the existing per-gaussian SH
 features double as bounce reflectance), so densification bookkeeping is
 untouched.
+
+## 6. Detailed Shading and Rasterization Pipeline
+
+This section provides a formal, step-by-step breakdown of how the color of a single surface patch (represented by a 3D Gaussian) is rendered in our implementation.
+
+### 6.1 Gaussian Attributes and Geometry
+Each Gaussian $i$ is defined by its position $\mu_i$, anisotropic scale $s_i$, rotation $q_i$ (quaternion), and opacity $\alpha_i$. For inverse rendering, we extend these with per-Gaussian PBR material properties:
+*   **Albedo** $a_i \in [0,1]^3$: The base color (diffuse reflectance).
+*   **Metallic** $m_i \in [0,1]$ and **Roughness** $r_i \in [0,1]$.
+*   **SH Features** $f_i \in \mathbb{R}^{48}$: Spherical Harmonic coefficients (degree 3, 16 per RGB channel) representing a baked radiance/reflectance field.
+
+The **shading normal** $n_i$ is not an independent parameter; it is derived from the Gaussian's geometry as the direction of the smallest eigenvector of its covariance matrix $\Sigma_i = R_i S_i S_i^T R_i^T$. This ensures that the normal is intrinsically linked to the thin surface direction.
+
+### 6.2 Visibility and Occlusion
+Visibility is handled via a 128³ voxel occupancy grid rasterized from the Gaussians.
+*   **Diffuse Visibility**: We pre-calculate binary occlusion $o_j \in \{0,1\}$ for $N=128$ directions $\omega_j$ sampled over the hemisphere defined by $n_i$.
+*   **Specular Visibility**: We calculate a scalar occlusion $o \in [0,1]$ for the perfect reflection direction $\hat{r}$ (derived from the view direction $v$ and normal $n_i$).
+
+### 6.3 PBR Shading Equation
+The total outgoing radiance $C_i$ from Gaussian $i$ is the sum of diffuse and specular components:
+$$C_i = (1 - m_i) \cdot a_i \cdot L_d + \rho_s \cdot L_s$$
+
+#### 6.3.1 Diffuse Component ($L_d$)
+The diffuse term averages the environment light over the hemisphere, accounting for self-occlusion and interreflections (LLI):
+$$L_d = \frac{1}{N} \sum_{j=1}^{N} \left[ (1 - o_j) \cdot E(\omega_j) + o_j \cdot b \right]$$
+*   **Direct Diffuse**: Unoccluded directions ($1-o_j$) sample the environment map $E$.
+*   **Indirect Bounce ($b$)**: Occluded directions receive a bounce term derived from the SH field evaluated at the shading normal $n_i$:
+    $$b = I_{SH}(n_i) \cdot \mu_E$$
+    where $\mu_E$ is the mean radiance of the current environment light and $I_{SH}(\omega) = (\text{SH}(f_i, \omega) + 0.5)^+$.
+
+#### 6.3.2 Specular Component ($L_s$)
+The specular term uses the split-sum approximation to handle environment reflections:
+$$L_s = (1 - o) \cdot E_r(\hat{r}, r_i) + o \cdot \left[ I_{SH}(\hat{r}) \cdot \mu_E \right]$$
+*   **Direct Specular**: Unoccluded reflections sample the prefiltered environment map $E_r$ at the reflection direction $\hat{r}$ and roughness level $r_i$. **Crucially**, for a mirror ($r_i \approx 0$), this samples the high-resolution HDRI directly, preserving sharp details. The environment mean $\mu_E$ does NOT scale this term, ensuring mirrors work as expected.
+*   **Indirect Specular**: Occluded reflections read the baked SH radiance field evaluated at the reflection direction $\hat{r}$, scaled by $\mu_E$ (LLI). $I_{SH}(\omega)$ is defined as $(\text{SH}(f_i, \omega) + 0.5)^+$.
+*   **Specular Reflectance ($\rho_s$)**: Calculated via the split-sum BRDF:
+    $$F_0 = 0.04(1 - m_i) + m_i \cdot a_i, \qquad \rho_s = F_0 \cdot A(n_i \cdot v, r_i) + B(n_i \cdot v, r_i)$$
+    where $A$ and $B$ are pre-integrated LUT values.
+
+### 6.4 The Single SH Field "Dual Evaluation"
+A key detail of our LLI implementation is the derivation of two separate physical values from the single 48-dimensional SH feature vector $f_i$. By evaluating the same SH field at different directions, we extract:
+1.  **Diffuse Bounce ($b$)**: Evaluated at the **normal** $n_i$. This represents the aggregate indirect energy arriving from the occluded hemisphere.
+2.  **Specular Indirect Radiance**: Evaluated at the **reflection direction** $\hat{r}$. This represents the baked radiance reflected toward the viewer.
+
+Both values are derived from the same underlying SH reflectance field and scale linearly with $\mu_E$, ensuring that interreflections adapt to light intensity changes while the high-frequency *direct* reflections from the environment map remain unscaled and sharp.
+
+### 6.5 Alpha Blending and Rasterization
+The final pixel color $C_{pixel}$ is computed by sorting all Gaussians overlapping the pixel by depth and performing front-to-back alpha blending:
+$$C_{pixel} = \sum_{i \in \text{ray}} C_i \cdot (\alpha_i G_i(x)) \cdot \prod_{j=1}^{i-1} (1 - \alpha_j G_j(x))$$
+where $G_i(x)$ is the 2D Gaussian evaluation at pixel coordinates $x$.
 
 **The detach (try_8 fix).** `env_mean` must be a pure read-out, never a
 gradient path into the envmap. In the first implementation (try_7) the
@@ -485,7 +559,7 @@ terms (like the healthy no-LLI runs) and the SH reflectance alone calibrates
 the bounce. Verified effect at paper scale (try_10): relight gain 1.002 with
 per-HDRI gains 0.89–1.14, envmap mean ratio falling to 1.14.
 
-## 6. Data and priors
+## 7. Data and priors
 
 The synthetic dataset (`data/datasets_with_priors/lego`) is Blender-rendered
 with per-view GT buffers: `albedo_gt` and `normal_gt` (**world-space**),
@@ -502,7 +576,7 @@ camera-space OpenGL — converted per §2.3), `metallic_video`,
 backgrounds) — the reason the invariant loss family (§2.1) and the alpha
 masking exist at all.
 
-## 7. Evaluation additions (all logging-only)
+## 8. Evaluation additions (all logging-only)
 
 The reference repo evaluates PSNR on renders. Our `periodic_evaluation`
 ([train.py:185+](GIR/train.py#L185)) adds, every `eval_interval = 5000`
@@ -534,7 +608,7 @@ iters (relight every 10 000):
   Calibration" page that plots relight gain, albedo gain and envmap ratio
   side by side.
 
-## 8. Infrastructure (not part of the method)
+## 9. Infrastructure (not part of the method)
 
 `GIR/run_experiments.py`: declarative batch runner (COMMON + per-variant
 overrides → full `train.py` command lines), stage-2 **warm-up buffer**
@@ -546,28 +620,28 @@ and the comparison report. Training subprocesses get
 allocator fragmentation OOM at >1 M gaussians). `train.py --start_checkpoint`
 resumes preserve metric history up to and including the resumed iteration.
 
-## 9. Final run configurations (try_10 batch, r2 / 60 k)
+## 10. Final run configurations (try_10 batch, r2 / 60 k)
 
-| parameter | baseline_no_prior | gt_zncc_grad_anchor_lli2 | gt_zncc_grad_anchor15_lli2 | diff_zncc_grad_lli2 |
-|---|---|---|---|---|
-| prior source | — (logged only) | GT (world-space) | GT (world-space) | DiffusionRenderer |
-| `albedo_prior_mode` | — | zncc_grad | zncc_grad | zncc_grad |
-| `warmup_albedo_prior_mode` | — | direct | direct | direct |
-| `albedo_geometry_warmup` | off | on | on | on |
-| `lambda_albedo_gt` | 0 | 0.25 | 0.25 | 0.25 |
-| `albedo_anchor_weight` | 0 | 0.05 | **0.15** | 0 |
-| `lambda_normal_gt` | 0 | 0.8 | 0.8 | 0.4 |
-| `lambda_metallic_gt` | 0 | 0.15 (vs zeros) | 0.15 (vs zeros) | 0.05 (metallic_video) |
-| `lambda_roughness_gt` | 0 | — (no GT) | — (no GT) | 0.05 (roughness_video) |
-| scheduler (ratio/final) | — | 0.15 / 1.0 | 0.15 / 1.0 | 0.15 / 1.0 |
-| `huber_delta` | — | 0.2 | 0.2 | 0.2 |
-| `tv_reduction_factor` | 1.0 | 0.75 | 0.75 | 0.75 |
-| `reg_hdr_weight` | 0.1 | 0.001 | 0.001 | 0.001 |
-| `reg_material_weight` | 0.05 | 0.05 | 0.05 | 0.05 |
-| geo LR anneal (final ×, until) | off | 0.05, 66 k | 0.05, 66 k | 0.05, 66 k |
-| `light_linear_indirect` | off | on | on | on |
-| `normal_camera_convention` | — | — (world GT) | — (world GT) | opengl |
-| shared | `-r 2`, 60 k iters, stages 5 k/30 k, densify 500→45 k @100, reset 3 k, `lambda_dssim 0.4`, cap 1.5 M, `--eval --random_background --hdr_rotation`, relight 24 views | | | |
+| parameter | baseline_no_prior | gt_zncc_anchor0_lli2 | diff_zncc_lli2 |
+|---|---|---|---|
+| prior source | — (logged only) | GT (world-space) | DiffusionRenderer |
+| `albedo_prior_mode` | — | zncc | zncc |
+| `warmup_albedo_prior_mode` | — | direct | direct |
+| `albedo_geometry_warmup` | off | on | on |
+| `lambda_albedo_gt` | 0 | 0.25 | 0.25 |
+| `albedo_anchor_weight` | 0 | **0.0** | 0 |
+| `lambda_normal_gt` | 0 | 0.8 | 0.4 |
+| `lambda_metallic_gt` | 0 | 0.15 (vs zeros) | 0.05 (metallic_video) |
+| `lambda_roughness_gt` | 0 | — (no GT) | 0.05 (roughness_video) |
+| scheduler (ratio/final) | — | 0.15 / 1.0 | 0.15 / 1.0 |
+| `huber_delta` | — | 0.2 | 0.2 |
+| `tv_reduction_factor` | 1.0 | 0.75 | 0.75 |
+| `reg_hdr_weight` | 0.1 | 0.001 | 0.001 |
+| `reg_material_weight` | 0.05 | 0.05 | 0.05 |
+| geo LR anneal (final ×, until) | off | 0.05, 66 k | 0.05, 66 k |
+| `light_linear_indirect` | off | on | on |
+| `normal_camera_convention` | — | — (world GT) | opengl |
+| shared | `-r 2`, 60 k iters, stages 5 k/30 k, densify 500→45 k @100, reset 3 k, `lambda_dssim 0.4`, cap 1.5 M, `--eval --random_background --hdr_rotation`, relight 24 views | | |
 
 ---
 
@@ -621,15 +695,17 @@ instead supervise structure invariantly, in the spirit of scale-invariant
 depth losses [7]. With $\hat x = (x-\mu_M(x))/\sigma_M(x)$ denoting
 per-channel standardization over $M$:
 
-$$\mathcal{L}_{zncc} = \mathrm{Huber}_\delta\!\big(\hat A, \hat{\tilde A}\big)_M,\qquad
-\mathcal{L}_{zncc\text{-}grad} = \sum_{d\in\{x,y\}} \tfrac{1}{3}\sum_c \big(1 - \mathrm{corr}_M(\partial_d A_c,\, \partial_d \tilde A_c)\big),$$
+$$\mathcal{L}_{zncc} = \mathrm{Huber}_\delta\!\big(\hat A, \hat{\tilde A}\big)_M,$$
 
-the latter computed on finite-difference images so that *any* smooth shading
-field — not only a global gain — is projected out, at the cost of leaving
-per-channel offsets free. A weak absolute **anchor**
+which is invariant to any per-channel affine transform (gain + bias) of 
+either input. While we also implemented a gradient-domain variant 
+($\mathcal{L}_{zncc\text{-}grad}$) to handle smooth shading fields in 
+the prior, plain $\mathcal{L}_{zncc}$ proved superior at paper scale 
+when combined with the albedo anchor. A weak absolute **anchor**
 $w_a\,\mathrm{Huber}_\delta(A,\tilde A)_M$ with $w_a < \lambda_{alb}$
-(0.15 vs 0.25; 0.05 suffices for the less invariant $\mathcal{L}_{zncc}$)
-re-pins the global scale without transferring local prior errors. Normal, metallic and roughness priors use masked robust losses;
+(0.0 in the final configuration vs 0.25; we found that without it we 
+get better results) re-pins the global scale without transferring 
+local prior errors. Normal, metallic and roughness priors use masked robust losses;
 on dielectric synthetic scenes the metallic prior (against zero) closes a
 degenerate rough-metallic energy channel the optimizer otherwise exploits.
 Prior gradients into geometry are throttled in Phase 3 by cosine-annealing
@@ -645,12 +721,28 @@ $\mu_E = \mathrm{mean}(E)$ of the **currently loaded** environment
 (gradient-detached):
 
 $$L_d = \tfrac{1}{N}\textstyle\sum_j \big[(1-o_j)\,E(\omega_j) + o_j\, b\big],\quad
-b = \big(\mathrm{SH}(f, n)+\tfrac12\big)^{+}\,\mu_E,\qquad
+b = I_{SH}(n)\,\mu_E,\qquad
 L_s = o\, I_{SH}(\hat r)\,\mu_E + (1-o)\,E_r(\hat r; r).$$
 
-During training this is a benign reparameterization; at relight $\mu_E$ is
-recomputed from the swapped HDRI, so all bounce energy scales linearly with
-the new light. The detach is essential: allowing gradients into $\mu_E$
+where $I_{SH}(\omega) = (\text{SH}(f, \omega) + 0.5)^+$. By scaling the 
+baked terms by the current environment's mean radiance $\mu_E$, we 
+transform them from absolute radiance into relative reflectances that 
+dynamically respond to lighting changes.
+
+Each gaussian stores its baked radiance field as 48-dimensional SH 
+features (degree 3). We derive two separate values from this single SH 
+field to handle occlusions by evaluating the same spherical harmonic 
+function at different directions: **one for indirect reflections** 
+(specular indirect light, evaluated at the reflection direction $\hat{r}$) 
+and **one for occluded direct reflections** (diffuse bounce 
+reflectance $b$, evaluated at the shading normal $n$). The name **LLI** 
+(Light-Linear Indirect) refers to the reparameterization of baked 
+radiance as a reflectance that scales linearly with the current 
+environment's mean radiance $\mu_E$. Sharp reflections (mirrors) are 
+preserved as they are handled by the *direct* specular term, which 
+samples the high-resolution environment map directly and is not 
+scaled by $\mu_E$. 
+The detach is essential: allowing gradients into $\mu_E$
 lets the optimizer inflate the mean via isolated bright texels, corrupting
 both the envmap and the bounce calibration. LLI adds no parameters (the
 existing SH features double as bounce reflectance).
